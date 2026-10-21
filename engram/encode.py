@@ -65,6 +65,13 @@ def _words(text):
     return set(re.findall(r"[a-z0-9]+", (text or "").lower().replace("'", "").replace("’", "")))
 
 
+def _identifier_shaped(tok):
+    """digits, path separators, camel/Pascal, snake_case, kebab/dotted names, ALL_CAPS."""
+    return (any(c.isdigit() for c in tok) or "/" in tok or "\\" in tok
+            or "_" in tok or "-" in tok or "." in tok
+            or bool(_CAMEL.search(tok)) or (len(tok) > 1 and tok.isupper()))
+
+
 def _identifier_veto(a, b):
     ta, tb = _raw_tokens(a), _raw_tokens(b)
     for k in set(ta) & set(tb):  # case-only / inserted-capital differences
@@ -73,7 +80,7 @@ def _identifier_veto(a, b):
             return True
     for k in set(ta) ^ set(tb):
         tok = ta.get(k) or tb.get(k)
-        if any(c.isdigit() for c in tok) or "/" in tok or "\\" in tok or _CAMEL.search(tok):
+        if _identifier_shaped(tok):
             return True
     return False
 

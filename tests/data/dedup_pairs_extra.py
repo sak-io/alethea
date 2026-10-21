@@ -30,3 +30,14 @@ LONG_PAIRS_EXTRA = [
     _long("case", "read the maxRetries setting", "read the maxretries setting"),
     _long("case", "pass the AuthToken along", "pass the Authtoken along"),
 ]
+
+LONG_PAIRS_EXTRA += [
+    _long("ident", "call get_user", "call get_users"),
+    _long("ident", "call get_user", "call getUser"),
+    _long("ident", "set max-retries", "set max-retry"),
+    _long("ident", "read foo.bar", "read foo.bars"),
+    _long("ident", "export DEFAULT_TIMEOUT", "export DEFAULT_TIMEOUTS"),
+    _long("ident", "use the UserProfile", "use the UserProfiles"),
+]
+SHORT_PAIRS.append(("ident", "Call get_user before rendering the profile page",
+                    "Call get_users before rendering the profile page"))

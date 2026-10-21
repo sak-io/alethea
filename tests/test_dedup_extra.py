@@ -44,3 +44,10 @@ class ExtraPairs(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProseUnchanged(unittest.TestCase):
+    def test_plain_plural_prose_not_identifier_vetoed(self):
+        self.assertFalse(enc._identifier_veto("call the user before rendering",
+                                              "call the users before rendering"))
+        self.assertTrue(enc._identifier_veto("call get_user before", "call get_users before"))
