@@ -3,6 +3,7 @@
 One connection; the caller holds the lock. No activation logic here.
 """
 import json
+import math
 import os
 import sqlite3
 import time
@@ -15,6 +16,29 @@ KINDS = ("episodic", "semantic", "procedural", "identity")
 DECAY = {"episodic": 0.5, "semantic": 0.2, "procedural": 0.1, "identity": 0.0}
 STATUSES = ("active", "archived", "suppressed")
 EDGE_STEP = 0.15
+ARCHIVE_ACTIVATION = -3.2
+DAY_S = 86400.0
+MIN_AGE_DAYS = 1.0 / 1440  # 1-minute floor
+MIN_STRENGTH = 1e-3
+DOWNSCALE_FACTOR = 0.93
+# Downscale periods per day, per kind (ADR 0003 item 4: d_kind/0.5). Uniform option: all 1.0.
+DOWNSCALE_RATE = {"episodic": 1.0, "semantic": 0.4, "procedural": 0.2, "identity": 0.0}
+UNIFORM_RATE = {"episodic": 1.0, "semantic": 1.0, "procedural": 1.0, "identity": 0.0}
+RECENCY_WEIGHT = 0.3
+RECENCY_TAU_DAYS = 7.0
+
+
+def base_activation(kind, strength, salience, age_days, since_access_days=None):
+    """ADR 0003: B = ln(n_eff/(1-d)) - d*ln(age) + 1.6*(s-0.5) + recency; n_eff = strength."""
+    d = DECAY.get(kind, 0.5)
+    n = max(float(strength), MIN_STRENGTH)
+    age = max(float(age_days), MIN_AGE_DAYS)
+    b = math.log(n / (1.0 - d)) - (d * math.log(age) if d else 0.0)
+    b += 1.6 * (float(salience) - 0.5)
+    if since_access_days is None:
+        since_access_days = age
+    b += RECENCY_WEIGHT * math.exp(-max(float(since_access_days), 0.0) / RECENCY_TAU_DAYS)
+    return b
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS memories (
@@ -138,6 +162,17 @@ class Cortex:
             "last_access=? WHERE id=?", (amount, self.clock(), mid))
         self.db.commit()
         return cur.rowcount > 0
+
+    def activation(self, mem, now=None):
+        """Activation of a memory (dict or id) at `now` (default: injected clock)."""
+        if isinstance(mem, str):
+            mem = self.get(mem)
+            if mem is None:
+                raise KeyError("no such memory")
+        now = self.clock() if now is None else now
+        age = max(now - mem["created_at"], 0.0) / DAY_S
+        since = max(now - (mem["last_access"] or mem["created_at"]), 0.0) / DAY_S
+        return base_activation(mem["kind"], mem["strength"], mem["salience"], age, since)
 
     def set_status(self, mid, status):
         if status not in STATUSES:
