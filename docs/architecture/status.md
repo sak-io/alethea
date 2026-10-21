@@ -1,4 +1,4 @@
-Status: DRAFT
-Round: 0
+Status: IN REVIEW (round 1)
+Round: 1
 Last review: none
-Updated: <date>
+Updated: 2026-10-21
