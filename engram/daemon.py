@@ -9,6 +9,9 @@ Wire format: see engram/client.py. Stdlib only.
 import contextlib
 import errno
 import fcntl
+import hashlib
+import hmac
+import ipaddress
 import json
 import math
 import os
@@ -36,6 +39,9 @@ SLOT_WAIT_S = 0.25
 MAX_CONNECTIONS = 64
 SLEEP_TICK_S = 1.0
 SLEEP_BUDGET_S = 120.0
+UNIX_PATH_MAX = 104
+MIN_TOKEN_LEN = 16
+AUTH_TABLE_MAX = 1024
 UNSUPPORTED = ("export_rules", "reembed", "pending")
 _KINDS = ("episodic", "semantic", "procedural", "identity")
 _PUBLIC = ("id kind content gist keywords salience strength access_count created_at "
@@ -44,6 +50,68 @@ _PUBLIC = ("id kind content gist keywords salience strength access_count created
 
 class BadRequest(ValueError):
     pass
+
+
+class StartupError(Exception):
+    """Configuration the daemon refuses to start with (message never contains a token)."""
+
+
+def _is_loopback(host):
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _truthy(v):
+    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+class AuthLimiter:
+    """Failed-auth throttling that can never lock out a correct token.
+
+    A correct token is always served. Failures only (1) get a growing, capped delay on the
+    failing reply, by how many recent failures that peer IP had, and (2) draw from a global
+    token bucket; over the bucket the connection is dropped without a reply or any work."""
+
+    def __init__(self, clock=time.monotonic, delay_unit=0.05, delay_cap=2.0,
+                 rate=20.0, burst=20.0, forget_s=30.0):
+        self.clock, self.unit, self.cap = clock, delay_unit, delay_cap
+        self.rate, self.burst, self.forget_s = rate, burst, forget_s
+        self._lock = threading.Lock()
+        self._state = {}  # peer -> [recent_fails, last_fail_time]
+        self._tokens, self._t = burst, None
+
+    def delay_for(self, n):
+        return min(self.cap, self.unit * 2.0 ** (max(n, 1) - 1)) if n < 64 else self.cap
+
+    def fail(self, peer):
+        """Record a failure. -> delay in seconds for the failing reply, or None = drop."""
+        now = self.clock()
+        with self._lock:
+            if self._t is not None:
+                self._tokens = min(self.burst, self._tokens + (now - self._t) * self.rate)
+            self._t = now
+            if self._tokens < 1.0:
+                return None
+            self._tokens -= 1.0
+            st = self._state.get(peer)
+            if st is None:
+                if len(self._state) >= AUTH_TABLE_MAX:
+                    self._state.pop(next(iter(self._state)))
+                st = self._state[peer] = [0, now]
+            elif now - st[1] > self.forget_s:
+                st[0] = 0
+            st[0] += 1
+            st[1] = now
+            return self.delay_for(st[0])
+
+    def ok(self, peer):
+        with self._lock:
+            self._state.pop(peer, None)
+
 
 
 def _err(msg, **kw):
@@ -364,14 +432,52 @@ class Engram:
 
 
 class ConnCtx:
-    """Per-connection context handed to handle_request (T17: TCP + auth state)."""
+    """Per-connection context handed to handle_request. Unix connections are trusted
+    (0600 socket in a 0700 dir). TCP connections carry `token` (bytes or None = no auth
+    configured) and a limiter; every TCP request is checked, none is trusted by history."""
 
-    def __init__(self, transport, peer=None, authenticated=True):
+    def __init__(self, transport, peer=None, authenticated=True, token=None, limiter=None):
         self.transport, self.peer, self.authenticated = transport, peer, authenticated
+        self.token, self.limiter = token, limiter
+        self.close = False  # set when the connection must be dropped after the reply
+        self.delay, self.drop = 0.0, False
+
+
+def _token_ok(expected, given):
+    if not isinstance(given, str):
+        return False
+    a = hashlib.sha256(expected).digest()  # equal length: compare_digest leaks nothing
+    b = hashlib.sha256(given.encode("utf-8", "surrogatepass")).digest()
+    return hmac.compare_digest(a, b)
+
+
+def _authorize(ctx, request):
+    """None if allowed, else the error reply. Never echoes or logs the token. The
+    constant-time compare ALWAYS runs: a correct token is served whatever happened before."""
+    if ctx.transport != "tcp" or ctx.token is None:
+        return None
+    if _token_ok(ctx.token, request.get("token") if isinstance(request, dict) else None):
+        ctx.authenticated = True
+        if ctx.limiter is not None:
+            ctx.limiter.ok(ctx.peer)
+        return None
+    ctx.authenticated = False
+    ctx.close = True
+    if ctx.limiter is not None:
+        ctx.delay = ctx.limiter.fail(ctx.peer)
+        if ctx.delay is None:
+            ctx.drop = True  # over the global failure budget: no reply, no more work
+    if (isinstance(request, dict) and request.get("verb") == "ping"
+            and "token" not in request):
+        return _err("unauthorized")
+    return _err("auth")
 
 
 def handle_request(engram, ctx, request):
     """Single entry for every transport. `request` is the decoded JSON value."""
+    denied = _authorize(ctx, request)
+    if denied is not None:
+        return denied
     if not isinstance(request, dict):
         return _err("request must be an object")
     params = dict(request)
@@ -382,9 +488,16 @@ def handle_request(engram, ctx, request):
 
 class Server:
     def __init__(self, engram, home=None, read_timeout=None, max_conns=MAX_CONNECTIONS,
-                 max_request=MAX_REQUEST_BYTES):
+                 max_request=MAX_REQUEST_BYTES, env=None, auth_clock=time.monotonic,
+                 auth_limits=None):
         self.engram = engram
+        self.env = (engram.env if engram is not None else os.environ) if env is None else env
         self.home = ensure_private_dir(home) if home else engram.home
+        self.limiter = AuthLimiter(auth_clock, **(auth_limits or {}))
+        self.tcp_listener = None
+        self.tcp_addr = None
+        self.token = None
+        self.fallback = False
         self.sock_path = str(self.home / "engram.sock")
         self.read_timeout = READ_TIMEOUT_S if read_timeout is None else read_timeout
         self.max_request = max_request
@@ -400,8 +513,45 @@ class Server:
 
     # lifecycle
 
+    def _read_token(self):
+        tok = self.env.get("ENGRAM_TOKEN")
+        if tok:
+            return tok
+        try:
+            with open(self.home / "token", encoding="utf-8") as f:
+                return f.read(512).strip() or None
+        except OSError:
+            return None
+
+    def _plan(self):
+        """Validate TCP/container policy before touching any file."""
+        e = self.env
+        container = _truthy(e.get("ENGRAM_CONTAINER"))
+        bind, port = e.get("ENGRAM_BIND") or None, e.get("ENGRAM_PORT") or None
+        if port is not None:
+            try:
+                port = int(port)
+                if not 0 <= port < 65536:
+                    raise ValueError
+            except ValueError:
+                raise StartupError("ENGRAM_PORT must be an integer in 0..65535")
+        wants_tcp = container or bind is not None or port is not None
+        if container and (bind is None or port is None):
+            raise StartupError("container mode needs explicit ENGRAM_BIND and ENGRAM_PORT")
+        host = bind or "127.0.0.1"
+        if wants_tcp:
+            tok = self._read_token()
+            if tok is not None and len(tok.encode("utf-8")) < MIN_TOKEN_LEN:
+                raise StartupError("ENGRAM_TOKEN must be at least %d bytes" % MIN_TOKEN_LEN)
+            if (container or not _is_loopback(host)) and tok is None:
+                raise StartupError("a token (ENGRAM_TOKEN, >= %d bytes) is required in "
+                                   "container mode or on a non-loopback bind" % MIN_TOKEN_LEN)
+        return container, host, (port or 0), wants_tcp
+
     def acquire_instance(self):
-        """True if we are the single instance (lock + socket); False if another won."""
+        """True if we are the single instance (lock + listeners); False if another won.
+        Raises StartupError when the bind/token policy refuses the configuration."""
+        container, host, port, wants_tcp = self._plan()
         lf = open(self.home / "daemon.lock", "a+")
         try:
             fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -409,44 +559,105 @@ class Server:
             lf.close()
             return False
         self._lockf = lf
+        with contextlib.suppress(OSError):
+            os.chmod(self.home / "daemon.lock", 0o600)
+        try:
+            if not container:
+                r = self._bind_unix()
+                if r is False:
+                    return False
+                if r is None:  # AF_UNIX unusable: loopback TCP fallback
+                    self.fallback = wants_tcp = True
+                    host = host if _is_loopback(host) else "127.0.0.1"
+            if wants_tcp:
+                self._bind_tcp(host, port)
+            if self.listener:
+                self._ensure_token()
+            self._write_discovery()
+            return True
+        except BaseException:
+            self._close_listeners()
+            self._release_lock()
+            raise
+
+    def _bind_unix(self):
+        """True = bound, False = another daemon owns it, None = fall back to TCP."""
+        if len(self.sock_path.encode()) > UNIX_PATH_MAX:
+            return None
         probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             probe.settimeout(1.0)
             probe.connect(self.sock_path)
-            lf.close()
-            self._lockf = None
+            self._release_lock()
             return False  # someone is answering on the socket
         except OSError:
             pass  # stale (or absent): we hold the lock, so safe to remove
         finally:
             probe.close()
-        with contextlib.suppress(FileNotFoundError):
+        with contextlib.suppress(OSError):
             os.unlink(self.sock_path)
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s = None
         old = os.umask(0o177)
         try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.bind(self.sock_path)
+            os.chmod(self.sock_path, 0o600)
+            s.listen(512)
         except OSError as e:
-            s.close()
-            self._release_lock()
+            if s:
+                s.close()
             if e.errno == errno.EADDRINUSE:
+                self._release_lock()
                 return False
-            raise
+            return None
         finally:
             os.umask(old)
-        os.chmod(self.sock_path, 0o600)
-        s.listen(512)
         s.settimeout(0.5)
         self.listener = s
-        self._ensure_token()
-        self._write_discovery()
         return True
 
+    def _bind_tcp(self, host, port):
+        token = self._read_token()
+        if token is None:
+            if not _is_loopback(host):
+                raise StartupError("a token is required on a non-loopback bind")
+            self._write_new_token()
+            token = self._read_token()
+        if token is None or len(token.encode("utf-8")) < MIN_TOKEN_LEN:
+            raise StartupError("a token of at least %d bytes is required" % MIN_TOKEN_LEN)
+        self.token = token.encode("utf-8")
+        fam = socket.AF_INET6 if ":" in host else socket.AF_INET
+        s = socket.socket(fam, socket.SOCK_STREAM)
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((host, port))
+            s.listen(512)
+        except OSError as e:
+            s.close()
+            raise StartupError("cannot bind %s:%s (%s)" % (host, port, e.strerror or e))
+        s.settimeout(0.5)
+        self.tcp_listener = s
+        self.tcp_addr = (host, s.getsockname()[1])
+
+    def _close_listeners(self):
+        for name in ("listener", "tcp_listener"):
+            s = getattr(self, name)
+            setattr(self, name, None)
+            if s:
+                with contextlib.suppress(Exception):
+                    s.close()
+
     def _ensure_token(self):
-        path = self.home / "token"
-        if os.environ.get("ENGRAM_TOKEN") or path.exists():
+        if self.env.get("ENGRAM_TOKEN") or (self.home / "token").exists():
             return
-        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        self._write_new_token()
+
+    def _write_new_token(self):
+        path = self.home / "token"
+        try:
+            fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            return
         with os.fdopen(fd, "w") as f:
             f.write(secrets.token_hex(32))
 
@@ -454,8 +665,13 @@ class Server:
         tmp = self.home / ("daemon.json.%d" % os.getpid())
         fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
-            json.dump({"pid": os.getpid(), "socket": self.sock_path,
-                       "version": __version__}, f)
+            d = {"pid": os.getpid(), "socket": self.sock_path if self.listener else None,
+                 "version": __version__}
+            if self.tcp_addr:
+                h = self.tcp_addr[0]
+                d["host"] = "::1" if h == "::" else "127.0.0.1" if h in ("0.0.0.0", "") else h
+                d["port"] = self.tcp_addr[1]
+            json.dump(d, f)
         os.replace(str(tmp), str(self.home / "daemon.json"))
 
     def _release_lock(self):
@@ -466,8 +682,12 @@ class Server:
 
     def start(self):
         """Start accept loop + sleep loop threads (after acquire_instance() is True)."""
-        for target, name in ((self._accept_loop, "accept"),
-                             (lambda: self.engram._sleep_loop(self.stop), "sleep-loop")):
+        loops = [(lambda: self.engram._sleep_loop(self.stop), "sleep-loop")]
+        if self.listener:
+            loops.insert(0, (lambda: self._accept_loop(self.listener, "unix"), "accept"))
+        if self.tcp_listener:
+            loops.insert(0, (lambda: self._accept_loop(self.tcp_listener, "tcp"), "accept-tcp"))
+        for target, name in loops:
             t = threading.Thread(target=target, daemon=True, name=name)
             t.start()
             self._threads.append(t)
@@ -480,10 +700,7 @@ class Server:
 
     def shutdown(self):
         self.stop.set()
-        if self.listener:
-            with contextlib.suppress(Exception):
-                self.listener.close()
-            self.listener = None
+        self._close_listeners()
         for t in self._threads:
             if t is not threading.current_thread():
                 t.join(timeout=3)
@@ -496,14 +713,14 @@ class Server:
 
     # connections
 
-    def _accept_loop(self):
+    def _accept_loop(self, listener, transport):
         while not self.stop.is_set():
             try:
-                conn, _ = self.listener.accept()
+                conn, addr = listener.accept()
             except socket.timeout:
                 continue
             except OSError:
-                if self.stop.is_set() or self.listener is None:
+                if self.stop.is_set() or listener not in (self.listener, self.tcp_listener):
                     return
                 time.sleep(0.05)
                 continue
@@ -511,7 +728,7 @@ class Server:
                 self._reply_close(conn, _err("busy"))
                 continue
             try:
-                threading.Thread(target=self._serve_conn, args=(conn,), daemon=True,
+                threading.Thread(target=self._serve_conn, args=(conn, transport, addr), daemon=True,
                                  name="conn").start()
             except Exception:
                 self.pending.release()
@@ -558,8 +775,12 @@ class Server:
                 started = True
                 deadline = time.monotonic() + self.read_timeout
 
-    def _serve_conn(self, conn):
-        ctx = ConnCtx("unix")
+    def _serve_conn(self, conn, transport="unix", addr=None):
+        if transport == "tcp":
+            peer = addr[0] if addr else None
+            ctx = ConnCtx("tcp", peer, False, self.token, self.limiter)
+        else:
+            ctx = ConnCtx("unix")
         buf = bytearray()
         try:
             while not self.stop.is_set():
@@ -581,7 +802,11 @@ class Server:
                     resp = handle_request(self.engram, ctx, request)
                 finally:
                     self.slots.release()
-                if not self._send(conn, resp):
+                if ctx.drop:
+                    return
+                if ctx.delay:
+                    self.stop.wait(ctx.delay)  # slows only this (failing) connection
+                if not self._send(conn, resp) or ctx.close:
                     return
         except Exception as e:
             sys.stderr.write("engram: connection error: %s\n" % type(e).__name__)
@@ -606,6 +831,9 @@ def main(argv=None):
         if not server.acquire_instance():
             return 0  # another daemon won (G18)
         server.engram = Engram(home=server.home)
+    except StartupError as e:
+        sys.stderr.write("engram: refusing to start: %s\n" % e)
+        return 2
     except Exception as e:
         sys.stderr.write("engram: cannot start: %s\n" % e)
         return 1
