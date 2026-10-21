@@ -23,6 +23,23 @@ class SimilarityTest(unittest.TestCase):
         a, b = "the api is thread safe", "the api isn't thread safe"
         self.assertLess(encode.similarity(a, b), encode.NEAR_DUPLICATE)
 
+    def test_substitution_damp_applies_to_long_entity_swap(self):
+        pre = "when the release engineering team prepares the weekly rollout they deploy to "
+        post = " before the final sign off happens on friday afternoon"
+        a, b = pre + "staging" + post, pre + "prod" + post
+        raw = max(encode.cosine(encode.vectorize.embed(a), encode.vectorize.embed(b)),
+                  encode.jaccard(a, b))
+        self.assertAlmostEqual(encode.similarity(a, b), raw * encode.VETO_FACTOR)
+
+    def test_substitution_damp_does_not_stack_with_other_vetoes(self):
+        pre = "when the release engineering team prepares the weekly rollout they deploy to "
+        post = " before the final sign off happens on friday afternoon"
+        for x, y, n in (("v1", "v2", 1), ("staging", "no prod", 1)):
+            a, b = pre + x + post, pre + y + post
+            raw = max(encode.cosine(encode.vectorize.embed(a), encode.vectorize.embed(b)),
+                      encode.jaccard(a, b))
+            self.assertAlmostEqual(encode.similarity(a, b), raw * encode.VETO_FACTOR ** n)
+
     def test_threshold_never_below_default(self):
         encode.register_threshold("loose", 0.5)
         try:
