@@ -2,6 +2,9 @@
 
 ADR 0003: decay acts on strength, ages are in days, per-kind DOWNSCALE_RATE.
 ADR 0005: the optional `lock` (context manager) is taken per batch, never for a run.
+Fairness: releasing and immediately re-acquiring a plain (unfair) RLock starves other
+threads, so callers that share the lock with request threads must pass a
+`engram.fairlock.FairLock` (FIFO handoff).
 All time comes from the injectable clock (`now` argument or `cortex.clock`).
 """
 import contextlib
@@ -497,10 +500,13 @@ def consolidate_episodes(cortex, distiller=None, lock=None, limit=None, should_s
                         out["poisoned"] += 1
                         continue
                     cortex.meta_set(k_att, attempts)
-                    try:
-                        gist = distiller.distill(turns)
-                    except Exception:
-                        gist = extract_gist(turns)
+                # The distiller (possibly slow, e.g. an LLM) runs OUTSIDE the lock: it only
+                # sees the already-read turn texts, never the cortex.
+                try:
+                    gist = distiller.distill(turns)
+                except Exception:
+                    gist = extract_gist(turns)
+                with _lock(lock):
                     _write_episode(cortex, ep, ids, gist, out, k_prog)
                     cortex.journal_mark_consolidated(ids)
                     _meta_del(cortex, k_att, k_prog)
@@ -558,12 +564,17 @@ JOURNAL_UNCONSOLIDATED_DAYS = 90.0   # owner-approved addition
 PURGE_BATCH = 500
 
 
-def purge_journal(cortex, now=None, lock=None):
+def purge_journal(cortex, now=None, lock=None, keep_sessions=()):
     """Delete consolidated journal rows older than 30 d and unconsolidated older than 90 d.
 
-    Batched, lock per batch. Returns dict(consolidated, unconsolidated). Idempotent.
+    Rows of `keep_sessions` (the live session) are never purged. Checkpoint/poison meta
+    keys of purged rows are removed with them. Batched, lock per batch.
+    Returns dict(consolidated, unconsolidated). Idempotent.
     """
     now = float(cortex.clock() if now is None else now)
+    keep = tuple(keep_sessions or ())
+    skip = " AND (session_id IS NULL OR session_id NOT IN (%s))" % ",".join("?" * len(keep)) \
+        if keep else ""
     out = {"consolidated": 0, "unconsolidated": 0}
     for key, flag, days in (("consolidated", 1, JOURNAL_CONSOLIDATED_DAYS),
                             ("unconsolidated", 0, JOURNAL_UNCONSOLIDATED_DAYS)):
@@ -571,25 +582,30 @@ def purge_journal(cortex, now=None, lock=None):
         while True:
             with _lock(lock):
                 ids = [r["id"] for r in cortex.db.execute(
-                    "SELECT id FROM journal WHERE consolidated=? AND created_at<? "
-                    "ORDER BY id LIMIT ?", (flag, cutoff, PURGE_BATCH))]
+                    "SELECT id FROM journal WHERE consolidated=? AND created_at<?" + skip
+                    + " ORDER BY id LIMIT ?", (flag, cutoff, *keep, PURGE_BATCH))]
                 if not ids:
                     break
-                cortex.db.execute("DELETE FROM journal WHERE id IN (%s)"
-                                  % ",".join("?" * len(ids)), ids)
+                marks = ",".join("?" * len(ids))
+                cortex.db.execute("DELETE FROM journal WHERE id IN (%s)" % marks, ids)
+                # episode checkpoints are keyed by the episode's first journal id
+                for pre in ("consol_poison:", "consol_attempts:", "consol_progress:"):
+                    cortex.db.execute("DELETE FROM engram_meta WHERE key IN (%s)"
+                                      % marks, [pre + str(i) for i in ids])
                 cortex.db.commit()
             out[key] += len(ids)
     return out
 
 
 def sleep_cycle(cortex, deep=True, consolidate_only=False, now=None, distiller=None,
-                lock=None, budget_s=None, timer=time.monotonic):
+                lock=None, budget_s=None, timer=time.monotonic, keep_sessions=()):
     """replay+gist -> downscale -> recombine, plus journal purge.
 
     Triggers: timer = defaults; PreCompact = `deep=False` (skips downscale, recombine);
     SessionEnd = `consolidate_only=True` (consolidate_episodes alone, no purge).
     Each stage is isolated: an exception is recorded under result["errors"][stage] and
-    the remaining stages still run; nothing is raised. `lock` (a context manager) is
+    the remaining stages still run; nothing is raised. `keep_sessions`: session ids whose
+    journal rows are never purged (the live session). `lock` (a context manager) is
     taken per batch inside the stages, never across a stage. `budget_s` is a wall-clock
     budget on `timer`: consolidation stops between episodes and later stages are skipped
     (result["stopped"]=True); unfinished journal rows stay pending (resumable).
@@ -613,7 +629,8 @@ def sleep_cycle(cortex, deep=True, consolidate_only=False, now=None, distiller=N
     plan = [("consolidate", lambda: consolidate_episodes(
         cortex, distiller=distiller, lock=lock, should_stop=over))]
     if not consolidate_only:
-        plan.append(("purge", lambda: purge_journal(cortex, t_now, lock=lock)))
+        plan.append(("purge", lambda: purge_journal(cortex, t_now, lock=lock,
+                                                       keep_sessions=keep_sessions)))
         if deep:
             plan.append(("downscale", lambda: downscale(cortex, t_now, lock=lock)))
             plan.append(("recombine", lambda: {"links": recombine(cortex, lock=lock)}))

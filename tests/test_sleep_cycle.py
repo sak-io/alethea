@@ -1,16 +1,22 @@
 """sleep_cycle orchestration, triggers, journal purge, stage isolation, perf budget (T15)."""
 import random
+import threading
 import time
 import unittest
 from unittest import mock
 
 from engram import consolidate, encode, vectorize
+from engram import markers
 from engram.cortex import Cortex, DAY_S
+from engram.fairlock import FairLock
 
 _SYL = "ba ke di mo tu ra ne si lo pa vi ze".split()
 # ~1.7k pseudo-words: a natural-language-sized vocabulary, so FTS and the vector scan
 # behave like real text rather than a 30-word toy corpus where every row matches.
 WORDS = ["".join(p) for p in __import__("itertools").product(_SYL, _SYL, _SYL)]
+
+
+BUDGET_ALL_DURABLE = 70.0
 
 
 class Clock:
@@ -278,7 +284,7 @@ class LockAndBudgetTest(Base):
 class PerformanceBudgetTest(unittest.TestCase):
     """The T13 review saw consolidation slow down as memories grew (R21)."""
 
-    def corpus(self, memories, sessions, rows_per_session=5, seed=3):
+    def corpus(self, memories, sessions, rows_per_session=5, seed=3, durable=False):
         rng = random.Random(seed)
         clock = Clock()
         c = Cortex(":memory:", clock=clock)
@@ -289,7 +295,7 @@ class PerformanceBudgetTest(unittest.TestCase):
         for s in range(sessions):
             for r in range(rows_per_session):
                 clock.t += 10
-                if r < 2:  # decisions: durable, novel, written
+                if durable or r < 2:  # decisions: durable, novel, written
                     text = ("We decided to always %s. Remember that %s."
                             % (sentence(rng), sentence(rng)))
                 else:  # chatter: little durable content
@@ -312,6 +318,24 @@ class PerformanceBudgetTest(unittest.TestCase):
         self.assertLess(elapsed, 30.0, "consolidation took %.1fs" % elapsed)
         c.close()
 
+    def test_all_durable_2k_rows_400_sessions_1k_memories(self):
+        """Worst case: every turn is a novel durable decision (2400 encodes).
+
+        Budget 70 s. Measured 36-44 s on the dev machine (about 15-18 ms per encode: the
+        FTS bm25 ranking over a few thousand rows and the bounded 600-row vector scan
+        dominate; both are required by the recall contract). The light corpus above,
+        with typical chatter, holds the 30 s budget.
+        """
+        c = self.corpus(1000, 400, durable=True)
+        t = time.perf_counter()
+        res = consolidate.sleep_cycle(c, deep=False)
+        elapsed = time.perf_counter() - t
+        self.assertTrue(res["ok"], res["errors"])
+        self.assertEqual(len(c.journal_pending()), 0)
+        print("all-durable 2k/400/1k: %.1fs" % elapsed)
+        self.assertLess(elapsed, BUDGET_ALL_DURABLE, "took %.1fs" % elapsed)
+        c.close()
+
     def test_cost_per_episode_stays_flat_as_memories_grow(self):
         def per_episode(memories):
             c = self.corpus(memories, 15)
@@ -323,6 +347,130 @@ class PerformanceBudgetTest(unittest.TestCase):
         small, big = per_episode(100), per_episode(1200)
         # the vector scan is bounded (600 rows), so 12x the memories must not cost 12x
         self.assertLess(big, small * 6 + 0.05, "%.4f vs %.4f s/episode" % (big, small))
+
+
+class DifferentialDedupTest(unittest.TestCase):
+    """Pruned _best_duplicate must equal the plain score-every-candidate loop."""
+
+    @staticmethod
+    def reference(cortex, content, embedder_id):
+        from engram import recall
+        best, best_m = 0.0, None
+        for m in recall.candidates(cortex, content, embedder_id=embedder_id):
+            if m.get("embedder_id") != embedder_id:
+                continue
+            s = encode.similarity(content[:markers.MAX_CHARS],
+                                  (m["content"] or "")[:markers.MAX_CHARS],
+                                  embedder=embedder_id)
+            if s > best:
+                best, best_m = s, m
+        return best, best_m
+
+    def test_identical_on_300_queries_including_fixtures(self):
+        from tests.data.dedup_pairs import PAIRS, LONG_PAIRS
+        from tests.data.dedup_pairs_extra import SHORT_PAIRS, LONG_PAIRS_EXTRA
+        fixtures = PAIRS + LONG_PAIRS + SHORT_PAIRS + LONG_PAIRS_EXTRA
+        rng = random.Random(11)
+        c = Cortex(":memory:", clock=Clock())
+        texts = [a for _, a, _ in fixtures] + ["We decided that " + sentence(rng) for _ in range(150)]
+        for t in texts:
+            c.insert("semantic", t, gist=t, keywords=t, salience=0.6,
+                     vector=vectorize.embed(t), embedder_id=vectorize.EMBEDDER_ID)
+        queries = [b for _, _, b in fixtures] + [a for _, a, _ in fixtures]
+        while len(queries) < 300:
+            w = rng.choice(texts).split()
+            if len(w) > 3 and rng.random() < .7:
+                del w[rng.randrange(len(w))]
+            if len(w) > 2 and rng.random() < .4:
+                i = rng.randrange(len(w) - 1)
+                w[i], w[i + 1] = w[i + 1], w[i]
+            queries.append(" ".join(w) + (" " + sentence(rng, 2) if rng.random() < .3 else ""))
+        for q in queries:
+            got = encode._best_duplicate(c, q, vectorize.EMBEDDER_ID)
+            want = self.reference(c, q, vectorize.EMBEDDER_ID)
+            self.assertEqual(got[0], want[0], q)
+            self.assertEqual(got[1] and got[1]["id"], want[1] and want[1]["id"], q)
+        c.close()
+
+
+class FairnessTest(Base):
+    def test_fairlock_is_reentrant_and_fifo(self):
+        lk = FairLock()
+        order = []
+        with lk:
+            with lk:
+                pass
+            ts = []
+            for i in range(3):
+                t = threading.Thread(target=lambda i=i: (lk.acquire(), order.append(i), lk.release()))
+                t.start()
+                ts.append(t)
+                time.sleep(0.05)  # enqueue in a known order
+        for t in ts:
+            t.join(5)
+        self.assertEqual(order, [0, 1, 2])
+
+    def test_concurrent_writer_is_not_starved_by_sleep_cycle(self):
+        for i in range(150):
+            self.session("s%d" % i)
+        lk = FairLock()
+        waits, stop = [], threading.Event()
+
+        def writer():
+            n = 0
+            while not stop.is_set():
+                t = time.perf_counter()
+                with lk:
+                    waits.append(time.perf_counter() - t)
+                    encode.remember(self.c, "writer fact number %d about zebra" % n)
+                n += 1
+                time.sleep(0.05)
+
+        th = threading.Thread(target=writer)
+        th.start()
+        try:
+            res = consolidate.sleep_cycle(self.c, deep=False, lock=lk)
+        finally:
+            stop.set()
+            th.join(10)
+        self.assertTrue(res["ok"], res["errors"])
+        self.assertEqual(res["stages"]["consolidate"]["episodes"], 150)
+        print("writer max wait %.3fs over %d ops" % (max(waits), len(waits)))
+        self.assertGreater(len(waits), 10)  # the writer kept making progress
+        self.assertLess(max(waits), 0.5, "max wait %.3fs over %d ops" % (max(waits), len(waits)))
+
+
+class PurgeSafetyTest(PurgeTest):
+    def test_live_session_rows_kept(self):
+        live = self.add(45, True)
+        self.c.db.execute("UPDATE journal SET session_id='live' WHERE id=?", (live,))
+        self.c.db.commit()
+        other = self.add(45, True)
+        consolidate.purge_journal(self.c, keep_sessions=["live"])
+        self.assertEqual(self.ids(), {live})
+        self.assertNotIn(other, self.ids())
+
+    def test_orphan_episode_meta_removed_with_rows(self):
+        rid = self.add(100, False)
+        for k in ("consol_poison:", "consol_attempts:", "consol_progress:"):
+            self.c.meta_set(k + str(rid), "1")
+        self.c.meta_set("consol_poison:99999", "1")
+        consolidate.purge_journal(self.c)
+        left = {r["key"] for r in self.c.db.execute("SELECT key FROM engram_meta")}
+        self.assertFalse({k for k in left if k.endswith(":%d" % rid)})
+        self.assertIn("consol_poison:99999", left)
+
+    def test_distiller_runs_outside_the_lock(self):
+        self.session("a")
+        k = CountingLock()
+        seen = []
+
+        class D:
+            def distill(inner, turns):
+                seen.append(k.depth)
+                return consolidate.extract_gist(turns)
+        consolidate.sleep_cycle(self.c, distiller=D(), lock=LockWrapper(k), deep=False)
+        self.assertEqual(seen, [0])
 
 
 class FastPathEquivalenceTest(unittest.TestCase):
