@@ -37,4 +37,11 @@ Causes found with cProfile of the last writes:
 3. **One SELECT per visited candidate** (about 215 per write): now fetched in batches of `PREFETCH` = 32 via `get_many` (a cache only; same results).
 The vector channel was already bounded (600 most recently touched rows via `idx_mem_vec`, about 1 ms to read, 8 ms to score).
 Fix and cap: the dedup path (`encode._best_duplicate`, `relevance_floor=False`) passes `fts_window=DEDUP_FTS_WINDOW` (2000) so FTS ranks only the 2000 newest rows (`rowid` window, `Cortex.search_fts(recent=N)`). Recall (`relevance_floor=True`, default) keeps the whole-corpus FTS channel, unchanged. The cap is not hit while the store has <= 2000 rows, so results there are identical (T21 differential test, dedup and adversarial suites unchanged and green). Beyond 2000 rows a near-duplicate that is neither among the 2000 newest rows nor in the 600-row vector window is not seen and a second copy is stored instead of reinforcing the old one (a false negative, the safe direction per lesson 1).
-After: 9.4 ms at 0-1k, 22.6 at 1k-3k, 27.8 at 3k-10k, 30.6 at 10k-20k (bounded; the remaining slow rise is page-cache and larger-corpus effects). Before at 1k-3k: 33 ms (same run conditions) and rising.
+Measured ms/write per band (same machine, same script; before = unmodified `autocraft/kickoff`, after = this branch):
+
+| rows | 0-1k | 1k-3k | 3k-10k | 10k-20k |
+|---|---|---|---|---|
+| before | 10.3 | 33.0 | 59.4 | 95.0 |
+| after | 9.4 | 22.6 | 27.8 | 30.6 |
+
+Before was O(n) (about 3 ms per 1k rows from FTS alone, plus the quadratic floor); after is bounded (the slow rise from 3k to 20k is page-cache and larger-index effects; the FTS window saturates at 2000 rows). Both runs shared the CPU with another job, so absolute numbers are noisy; the shape is the finding.
