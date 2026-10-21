@@ -1,6 +1,6 @@
 # ADR 0005: Sleep cycle must not hold the global lock for its whole run
 
-Status: Proposed (architect) | Concerns T§1, T§7, T§8 | Risk: hook latency budget (2 s)
+Status: Accepted (architect proposal, implemented and reviewed) | Concerns T§1, T§7, T§8 | Risk: hook latency budget (2 s)
 
 **Context.** One RLock serializes all mutations. A full `sleep_cycle()` (replay, gist, downscale over all rows, recombine over 60x60 pairs) can run long; a `SessionStart` briefing arriving then would block past the 2 s hook timeout and silently look "offline".
 

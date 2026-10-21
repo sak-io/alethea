@@ -107,6 +107,10 @@ _COLS = ("id kind content gist keywords salience strength access_count created_a
          "last_access status session_id cwd repo_root vector embedder_id meta").split()
 
 
+class SchemaVersionError(RuntimeError):
+    """The database was written by a newer Engram; refuse to open it."""
+
+
 class Cortex:
     def __init__(self, path, clock=time.time):
         self.clock = clock
@@ -120,6 +124,15 @@ class Cortex:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.executescript(_SCHEMA)
+        try:
+            stored = int(self.meta_get("schema_version") or 0)
+        except ValueError:
+            stored = 0
+        if stored > SCHEMA_VERSION:
+            self.db.close()
+            raise SchemaVersionError(
+                "database %s has schema version %d, newer than this Engram supports (%d); "
+                "upgrade Engram or use a different ENGRAM_HOME" % (path, stored, SCHEMA_VERSION))
         self.fts_available = True
         try:
             self.db.executescript(_FTS)
@@ -225,13 +238,21 @@ class Cortex:
         self.db.execute("DELETE FROM memories WHERE id=?", (mid,))
         self.db.commit()
 
-    def search_fts(self, query, limit=20):
+    def search_fts(self, query, limit=20, recent=None):
+        """Ids by FTS rank. `recent=N` ranks only the N newest rows (rowid window): bm25
+        is computed for every matching row, so on a large, word-overlapping corpus the
+        unbounded query is O(n); the window bounds it. Exact when the table has <= N rows."""
         if not self.fts_available:
             return []
+        sql = ("SELECT m.id FROM mem_fts JOIN memories m ON m.rowid=mem_fts.rowid "
+               "WHERE mem_fts MATCH ?")
+        args = [query]
+        if recent is not None:
+            top = self.db.execute("SELECT MAX(rowid) FROM memories").fetchone()[0] or 0
+            sql += " AND mem_fts.rowid > ?"
+            args.append(top - max(1, int(recent)))
         try:
-            rows = self.db.execute(
-                "SELECT m.id FROM mem_fts JOIN memories m ON m.rowid=mem_fts.rowid "
-                "WHERE mem_fts MATCH ? ORDER BY rank LIMIT ?", (query, limit)).fetchall()
+            rows = self.db.execute(sql + " ORDER BY rank LIMIT ?", args + [limit]).fetchall()
         except sqlite3.OperationalError:
             return []
         return [r["id"] for r in rows]

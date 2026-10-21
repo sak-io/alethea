@@ -251,6 +251,32 @@ class ReplyAndTokenFile(Base):
 
 
 class Autostart(Base):
+    def test_lock_and_stamp_are_0600_under_umask_0(self):
+        import stat
+        lock = os.path.join(self.home, "autostart.lock")  # a loose pre-existing lock is fixed
+        with open(lock, "w"):
+            pass
+        os.chmod(lock, 0o666)
+        old = os.umask(0)
+        try:
+            client.autostart(env=self.env, wait=0.2, cmd=["/nonexistent"])
+        finally:
+            os.umask(old)
+        for name in ("autostart.lock", "autostart.stamp"):
+            mode = stat.S_IMODE(os.stat(os.path.join(self.home, name)).st_mode)
+            self.assertEqual(mode, 0o600, name)
+
+    def test_fresh_lock_and_stamp_are_0600_under_umask_0(self):
+        import stat
+        old = os.umask(0)
+        try:
+            client.autostart(env=self.env, wait=0.2, cmd=["/nonexistent"])
+        finally:
+            os.umask(old)
+        for name in ("autostart.lock", "autostart.stamp"):
+            mode = stat.S_IMODE(os.stat(os.path.join(self.home, name)).st_mode)
+            self.assertEqual(mode, 0o600, name)
+
     def test_noop_in_container_mode(self):
         self.env["ENGRAM_CONTAINER"] = "1"
         t = time.monotonic()
@@ -279,12 +305,13 @@ class Autostart(Base):
                 "end=time.time()+8\n"
                 "while time.time()<end:\n"
                 "  c,_=s.accept();c.recv(4096);c.sendall(b'{\"ok\":true}\\n');c.close()\n")
-        pids = []
+        pids, procs = [], []
         orig = subprocess.Popen
 
         def spy(*a, **k):
             p = orig(*a, **k)
             pids.append(p.pid)
+            procs.append(p)  # keep the handle so it can be reaped (no ResourceWarning)
             return p
         client.subprocess.Popen = spy
         try:
@@ -301,6 +328,8 @@ class Autostart(Base):
                     os.kill(p, signal.SIGKILL)
                 except OSError:
                     pass
+            for p in procs:
+                p.wait(timeout=5)
 
     def _no_spawn(self, wait):
         calls = []

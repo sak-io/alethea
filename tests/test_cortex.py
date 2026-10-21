@@ -1,10 +1,12 @@
 import os
+import sqlite3
 import stat
 import tempfile
 import unittest
 from pathlib import Path
 
-from engram.cortex import Cortex, KINDS, DECAY
+from engram.config import SCHEMA_VERSION
+from engram.cortex import Cortex, KINDS, DECAY, SchemaVersionError
 
 
 class Clock:
@@ -19,6 +21,7 @@ class CortexTest(unittest.TestCase):
     def setUp(self):
         self.clock = Clock()
         self.c = Cortex(":memory:", clock=self.clock)
+        self.addCleanup(self.c.close)
 
     def test_constants(self):
         self.assertEqual(set(KINDS), set(DECAY))
@@ -90,6 +93,7 @@ class CortexTest(unittest.TestCase):
 class FtsTest(unittest.TestCase):
     def setUp(self):
         self.c = Cortex(":memory:")
+        self.addCleanup(self.c.close)
         if not self.c.fts_available:
             self.skipTest("FTS5 missing")
 
@@ -102,6 +106,15 @@ class FtsTest(unittest.TestCase):
         self.assertEqual(self.c.search_fts("caching"), [mid])
         self.c.delete(mid)
         self.assertEqual(self.c.search_fts("redis"), [])
+
+    def test_recent_window_limits_fts_and_is_exact_when_not_hit(self):
+        ids = [self.c.insert("semantic", "shared words item%d" % i) for i in range(30)]
+        every = self.c.search_fts("shared", limit=100)
+        self.assertEqual(sorted(every), sorted(ids))
+        self.assertEqual(self.c.search_fts("shared", limit=100, recent=30), every)  # cap not hit
+        self.assertEqual(self.c.search_fts("shared", limit=100, recent=100), every)
+        self.assertEqual(sorted(self.c.search_fts("shared", limit=100, recent=10)), sorted(ids[-10:]))
+        self.assertEqual(self.c.search_fts("shared", limit=100, recent=0), [ids[-1]])  # clamped to 1
 
     def test_reinforce_does_not_break_fts(self):
         mid = self.c.insert("semantic", "alpha beta")
@@ -121,6 +134,7 @@ class DegradeTest(unittest.TestCase):
             c = Cortex(":memory:")
         finally:
             cx._FTS = orig
+        self.addCleanup(c.close)
         self.assertFalse(c.fts_available)
         mid = c.insert("semantic", "still works")
         self.assertEqual(c.get(mid)["content"], "still works")
@@ -143,8 +157,29 @@ class FileTest(unittest.TestCase):
             self.assertTrue(c.set_status(mid, "archived"))
             self.assertFalse(c.set_status("missing", "archived"))
             c.close()
-            self.assertEqual(Cortex(p).get(mid)["content"], "I am Ann")
+            c2 = Cortex(p)
+            self.assertEqual(c2.get(mid)["content"], "I am Ann")
+            c2.close()
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SchemaVersionTest(unittest.TestCase):
+    def test_newer_schema_is_refused_and_older_or_equal_opens(self):
+        with tempfile.TemporaryDirectory() as t:
+            path = os.path.join(t, "engram.db")
+            c = Cortex(path)
+            c.meta_set("schema_version", str(SCHEMA_VERSION + 1))
+            c.db.commit()
+            c.close()
+            with self.assertRaises(SchemaVersionError) as cm:
+                Cortex(path)
+            self.assertIn("newer", str(cm.exception))
+
+            db = sqlite3.connect(path)
+            db.execute("UPDATE engram_meta SET value=? WHERE key='schema_version'", (str(SCHEMA_VERSION),))
+            db.commit()
+            db.close()
+            Cortex(path).close()

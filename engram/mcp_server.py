@@ -392,6 +392,8 @@ def serve(stdin=None, stdout=None, server=None):
 
 def main():
     try:
+        if not client.SUPPORTED:
+            _log(client.UNSUPPORTED_MSG + "; every tool will report the memory service as offline")
         return serve()
     except BaseException as e:
         if not isinstance(e, KeyboardInterrupt):

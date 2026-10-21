@@ -12,6 +12,7 @@ UNRELATED = "deploy the kubernetes cluster tonight"
 class RecombineTest(unittest.TestCase):
     def setUp(self):
         self.c = Cortex(":memory:", clock=lambda: 1000.0)
+        self.addCleanup(self.c.close)
 
     def edges(self):
         return self.c.db.execute("SELECT * FROM edges WHERE kind='recombined'").fetchall()

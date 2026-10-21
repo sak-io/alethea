@@ -106,5 +106,28 @@ class GitCtxTest(unittest.TestCase):
             self.assertEqual(c.kwargs["timeout"], 1.0)
 
 
+    def test_caches_are_lru_bounded(self):
+        gitctx.cache_clear()
+        with mock.patch.object(gitctx, "MAX_ENTRIES", 3), \
+                mock.patch.object(gitctx, "_resolve", side_effect=lambda r: r if "ok" in r else None):
+            dirs = [os.path.join(self.base, "ok%d" % i) for i in range(5)]
+            for d in dirs:
+                os.mkdir(d)
+                self.assertEqual(gitctx.repo_root(d), d)
+            self.assertEqual(len(gitctx._cache), 3)
+            self.assertNotIn(dirs[0], gitctx._cache)
+            self.assertIn(dirs[4], gitctx._cache)
+            # recently used entry survives eviction
+            gitctx.repo_root(dirs[2])
+            extra = os.path.join(self.base, "ok9")
+            os.mkdir(extra)
+            gitctx.repo_root(extra)
+            self.assertIn(dirs[2], gitctx._cache)
+            self.assertNotIn(dirs[3], gitctx._cache)
+            for i in range(6):
+                gitctx.repo_root(os.path.join(self.base, "bad%d" % i))
+            self.assertLessEqual(len(gitctx._neg), 3)
+
+
 if __name__ == "__main__":
     unittest.main()

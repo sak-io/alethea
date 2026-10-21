@@ -3,6 +3,7 @@
 All regexes are linear-time (no nested/overlapping quantifiers) and every input
 is length-capped before it reaches a regex, the tokenizer or FTS.
 """
+import heapq
 import math
 import re
 
@@ -13,6 +14,7 @@ MAX_QUERY_TOKENS = 32
 MAX_IDENTITY_CHARS = 200
 K = 8
 POOL = 20
+PREFETCH = 32  # row-fetch batch size in candidates()
 W_LEX, W_SEM, SEM_GAIN = 0.55, 0.45, 1.8
 HIT_BOOST, SPREAD_BOOST = 0.6, 0.35
 SPREAD_TOP, SPREAD_DAMP = 3, 0.5
@@ -97,12 +99,15 @@ def _sigmoid(x):
     return e / (1.0 + e)
 
 
-def candidates(cortex, cue, pool=POOL, embedder_id=vectorize.EMBEDDER_ID, relevance_floor=True):
+def candidates(cortex, cue, pool=POOL, embedder_id=vectorize.EMBEDDER_ID, relevance_floor=True,
+               fts_window=None):
     """Fused, scored active memories (dicts + lex/sem/relevance/score), best first.
 
     No reinforcement. Vector channel: only rows with the same embedder_id among the
     max(pool*4, 600) most recently touched; FTS covers the whole corpus. `relevance_floor=False`
     disables the semantic-only relevance floor (encode's novelty/dedup wants every neighbour).
+    `fts_window=N` limits the FTS channel to the N newest rows (the write path uses it:
+    FTS ranking is O(corpus) on word-overlapping text); None = whole corpus (recall).
     """
     cue = _cap(cue)
     if not cue.strip():
@@ -112,7 +117,8 @@ def candidates(cortex, cue, pool=POOL, embedder_id=vectorize.EMBEDDER_ID, releva
     seen = {}  # id -> memory dict fetched once (avoids a second get per hit)
     q = _fts_query(cue)
     if q:
-        hits = cortex.search_fts(q, limit=pool * 4)
+        hits = (cortex.search_fts(q, limit=pool * 4) if fts_window is None
+                else cortex.search_fts(q, limit=pool * 4, recent=fts_window))
         seen = cortex.get_many(hits)
         active = [mid for mid in hits if mid in seen and seen[mid]["status"] == "active"]
         n = len(active)
@@ -145,16 +151,23 @@ def candidates(cortex, cue, pool=POOL, embedder_id=vectorize.EMBEDDER_ID, releva
     rels = {mid: W_LEX * lex.get(mid, 0.0) + W_SEM * min(1.0, sem.get(mid, 0.0) * SEM_GAIN)
             for mid in set(lex) | set(sem)}
     out = []
+    top = []  # min-heap of the best `pool` scores seen so far
     floor = -1.0
     stems = _cue_stems(cue) if relevance_floor else ()
-    for mid in sorted(rels, key=lambda i: (-rels[i], i)):
+    order = sorted(rels, key=lambda i: (-rels[i], i))
+    for idx, mid in enumerate(order):
         rel = rels[mid]
         sem_ok = (sem_floor.get(mid, 0.0) if relevance_floor else sem.get(mid, 0.0)) >= SEM_MIN_COS
         if relevance_floor and not sem_ok and mid not in lex:
             continue
         if len(out) >= pool and rel < floor:
             break
-        m = seen.get(mid) or cortex.get(mid)
+        if mid not in seen:  # prefetch the next ids in one query (a cache only: same results)
+            batch = [x for x in order[idx:idx + PREFETCH] if x not in seen]
+            got = cortex.get_many(batch)
+            for x in batch:
+                seen[x] = got.get(x)
+        m = seen[mid]
         if m is None or m["status"] != "active":
             continue
         if relevance_floor and not sem_ok and not _covers(m, stems):
@@ -163,8 +176,12 @@ def candidates(cortex, cue, pool=POOL, embedder_id=vectorize.EMBEDDER_ID, releva
         m.update(lex=lex.get(mid, 0.0), sem=sem.get(mid, 0.0), relevance=rel,
                  score=rel * (0.55 + 0.45 * _sigmoid(act)))
         out.append(m)
-        if len(out) >= pool:
-            floor = sorted((x["score"] for x in out), reverse=True)[pool - 1]
+        if len(top) < pool:
+            heapq.heappush(top, m["score"])
+        else:
+            heapq.heappushpop(top, m["score"])
+        if len(top) >= pool:
+            floor = top[0]  # the pool-th best score so far (min-heap of the best `pool`)
     out.sort(key=lambda m: (-m["score"], m["id"]))
     return out[:pool]
 

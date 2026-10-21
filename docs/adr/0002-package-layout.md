@@ -1,6 +1,6 @@
 # ADR 0002: Package layout and script entry points
 
-Status: Proposed (architect) | Refines T§2 | Gaps: S G26
+Status: Accepted (architect proposal, implemented and reviewed) | Refines T§2 | Gaps: S G26
 
 **Context.** T§2 draws everything under `engram/`, but Claude Code uses `-m engram.mcp_server` (needs a package) while Cursor uses `python3 /abs/path/mcp_server.py` (runs as a script, where sibling imports break).
 

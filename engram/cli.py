@@ -272,6 +272,9 @@ COMMANDS = {"status": cmd_status, "up": cmd_up, "sleep": cmd_sleep, "recall": cm
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if not client.SUPPORTED:
+        _err(client.UNSUPPORTED_MSG)
+        return _offline_exit(args)
     try:
         return COMMANDS[args.cmd](args)
     except BrokenPipeError:

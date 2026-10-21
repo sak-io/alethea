@@ -1,6 +1,6 @@
 # ADR 0004: TCP bind policy and token authentication
 
-Status: Proposed (architect) | Implements owner decision G14 | Threat: local-data exposure
+Status: Accepted (architect proposal, implemented and reviewed) | Implements owner decision G14 | Threat: local-data exposure
 
 **Context.** Owner: TCP binds 127.0.0.1 by default; `ENGRAM_TOKEN` required in container mode. Problem: a daemon bound to 127.0.0.1 *inside* a container is unreachable through a published port.
 

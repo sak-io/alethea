@@ -17,6 +17,10 @@ DELIBERATE_FLOOR = 0.55
 GIST_CHARS = 200
 # Per-turn input cap in bytes (env ENGRAM_MAX_TURN_BYTES), applied before redact/journal.
 MAX_TURN_BYTES = 256 * 1024
+# Dedup looks for neighbours in the FTS channel among the newest DEDUP_FTS_WINDOW rows only
+# (plus the 600-row vector window), so the per-write cost is bounded instead of O(corpus).
+# Exact while the store has <= this many rows. See lessons.md (write scaling).
+DEDUP_FTS_WINDOW = 2000
 TRUNCATION_MARKER = "\n[TRUNCATED]"
 MAX_KEYWORDS = 12
 VETO_FACTOR = 0.55
@@ -302,7 +306,8 @@ def _best_duplicate(cortex, content, embedder_id):
     from engram import recall  # deferred: recall imports encode (ADR 0002)
     best, best_m, best_i = 0.0, None, -1
     pool = []
-    for i, m in enumerate(recall.candidates(cortex, content, embedder_id=embedder_id, relevance_floor=False)):
+    for i, m in enumerate(recall.candidates(cortex, content, embedder_id=embedder_id, relevance_floor=False,
+                                      fts_window=DEDUP_FTS_WINDOW)):
         if m.get("embedder_id") != embedder_id:
             continue  # never compare across embedders
         a, b = content[:markers.MAX_CHARS], (m["content"] or "")[:markers.MAX_CHARS]
