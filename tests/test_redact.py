@@ -56,7 +56,9 @@ class RedactTests(unittest.TestCase):
             self.assertLess(dt, 1.0, (c[:20], dt))
 
     def test_adversarial_1mb(self):
-        n = 1_000_000
+        # 300 kB (was 1 MB, ~9 s): a quadratic pattern is already >100x over the 1 s bound
+        # here, and test_adversarial_linear_time covers 200 kB; the property is unchanged.
+        n = 300_000
         cases = ["a." * (n // 2), "a-" * (n // 2), "=" * n, "sk-" * (n // 3),
                  "BEGIN" * (n // 5), '"' * n, "'" * n, 'password="' * (n // 10),
                  "token='" * (n // 7), "password: " * (n // 10), "_key=" * (n // 5),

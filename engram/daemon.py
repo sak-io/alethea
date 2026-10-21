@@ -650,6 +650,8 @@ class Server:
             setattr(self, name, None)
             if s:
                 with contextlib.suppress(Exception):
+                    s.shutdown(socket.SHUT_RDWR)  # wakes a blocked accept() at once (Linux)
+                with contextlib.suppress(Exception):
                     s.close()
 
     def _ensure_token(self):

@@ -240,12 +240,16 @@ class TcpAuth(unittest.TestCase):
         self.assertEqual(r, {"ok": False, "error": "request too large"})
 
     def test_slow_loris_dropped(self):
+        # short server deadlines (default 1.5 s first byte / 5 s read) keep the test ~1 s;
+        # the behaviour under test (idle and partial lines are dropped) is the same.
+        d = Daemon(extra={"ENGRAM_PORT": "0", "ENGRAM_TOKEN": TOKEN}, read_timeout=0.6)
+        self.addCleanup(d.stop)
         t0 = time.monotonic()
-        s = raw(self.d.port, b"", read=False)
+        s = raw(d.port, b"", read=False)
         self.addCleanup(s.close)
         self.assertEqual(s.recv(10), b"")  # idle socket closed at the first-byte deadline
         self.assertLess(time.monotonic() - t0, 3.0)
-        s2 = raw(self.d.port, b'{"verb":"ping"', read=False)  # partial line
+        s2 = raw(d.port, b'{"verb":"ping"', read=False)  # partial line
         self.addCleanup(s2.close)
         s2.settimeout(8)
         self.assertIn(b"read timeout", s2.recv(100))

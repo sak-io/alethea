@@ -160,7 +160,7 @@ class HardeningTests(unittest.TestCase):
         r = self.d.call("remember", {"content": "Loris neighbour fact kk31 persists"}, timeout=2)
         self.assertTrue(r["ok"], r)
         self.assertLess(time.time() - t0, 2)
-        time.sleep(1.5)  # read deadline drops the loris connections
+        time.sleep(1.3)  # read deadline (1.0 s here) drops the loris connections
         for s in loris:
             s.settimeout(2)
             data = s.recv(4096)
@@ -176,7 +176,7 @@ class HardeningTests(unittest.TestCase):
                             timeout=2)
             self.assertTrue(r["ok"], r)
             self.assertLess(time.time() - t0, 1.0)
-            time.sleep(2.0)  # first-byte deadline reaps the idle sockets
+            time.sleep(1.4)  # first-byte deadline (1.0 s here) reaps the idle sockets
             for s in idle[:5]:
                 s.settimeout(1)
                 self.assertEqual(s.recv(10), b"")

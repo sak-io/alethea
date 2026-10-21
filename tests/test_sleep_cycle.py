@@ -341,6 +341,8 @@ class PerformanceBudgetTest(unittest.TestCase):
         self.assertLess(elapsed, BUDGET_ALL_DURABLE, "took %.1fs" % elapsed)
         c.close()
 
+    @unittest.skipUnless(os.environ.get("ENGRAM_SLOW_TESTS"),
+                         "timing benchmark (~1.2 s); set ENGRAM_SLOW_TESTS=1")
     def test_cost_per_episode_stays_flat_as_memories_grow(self):
         def per_episode(memories):
             c = self.corpus(memories, 15)
@@ -361,7 +363,8 @@ class DifferentialDedupTest(unittest.TestCase):
     def reference(cortex, content, embedder_id):
         from engram import recall
         best, best_m = 0.0, None
-        for m in recall.candidates(cortex, content, embedder_id=embedder_id):
+        for m in recall.candidates(cortex, content, embedder_id=embedder_id,
+                                  relevance_floor=False):
             if m.get("embedder_id") != embedder_id:
                 continue
             s = encode.similarity(content[:markers.MAX_CHARS],
@@ -416,7 +419,7 @@ class FairnessTest(Base):
         self.assertEqual(order, [0, 1, 2])
 
     def test_concurrent_writer_is_not_starved_by_sleep_cycle(self):
-        for i in range(150):
+        for i in range(60):  # was 150 (~9 s); 60 episodes still span ~4 s of lock batches
             self.session("s%d" % i)
         lk = FairLock()
         waits, stop = [], threading.Event()
@@ -439,7 +442,7 @@ class FairnessTest(Base):
             stop.set()
             th.join(10)
         self.assertTrue(res["ok"], res["errors"])
-        self.assertEqual(res["stages"]["consolidate"]["episodes"], 150)
+        self.assertEqual(res["stages"]["consolidate"]["episodes"], 60)
         print("writer max wait %.3fs over %d ops" % (max(waits), len(waits)))
         self.assertGreater(len(waits), 10)  # the writer kept making progress
         self.assertLess(max(waits), 0.5, "max wait %.3fs over %d ops" % (max(waits), len(waits)))

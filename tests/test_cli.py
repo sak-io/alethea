@@ -143,8 +143,8 @@ class RoundTrip(WithDaemon):
             shutil.rmtree(home, ignore_errors=True)
 
     def test_epipe_with_head(self):
-        for i in range(30):
-            run(self.home, "remember", "Penguin fact number %d about glaciers" % i)
+        for i in range(30):  # seeded in-process: 30 mnemo subprocesses cost ~4 s
+            self.d.call("remember", {"content": "Penguin fact number %d about glaciers" % i})
         env = dict(os.environ, ENGRAM_HOME=self.home, PYTHONDONTWRITEBYTECODE="1")
         r = subprocess.run("%s %s dump | head -1" % (sys.executable, MNEMO), shell=True,
                            env=env, capture_output=True, text=True, cwd="/tmp")
@@ -193,9 +193,15 @@ class Offline(unittest.TestCase):
         srv.bind(os.path.join(self.home, "engram.sock"))
         srv.listen(8)
         try:
+            # same code path as the real 10 s TIMEOUT_CLI, shrunk to 1 s to keep the suite fast
+            code = ("import sys\nfrom engram import client, cli\nclient.TIMEOUT_CLI = 1.0\n"
+                    "sys.exit(cli.main(['status']))")
+            env = dict(os.environ, ENGRAM_HOME=self.home, PYTHONPATH=ROOT,
+                       PYTHONDONTWRITEBYTECODE="1")
             t = time.time()
-            r = run(self.home, "status")
-            self.assertLess(time.time() - t, 20)
+            r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True,
+                               text=True, timeout=30)
+            self.assertLess(time.time() - t, 8)
             self.assertEqual(r.returncode, 0)
             self.assertNotIn("Traceback", r.stderr)
         finally:

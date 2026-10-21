@@ -343,13 +343,15 @@ class DaemonDown(unittest.TestCase):
         s.bind(os.path.join(self.home, "engram.sock"))
         s.listen(5)  # accepts at the kernel level, never replies
         self.addCleanup(s.close)
-        m = Mcp(self.home)
-        m.init()
+        # in-process with TIMEOUT_MCP shrunk from 5 s to 1 s (same code path, ~4 s faster)
+        from unittest import mock
+        from engram import client
+        srv = mcp_server.Server(env={"ENGRAM_HOME": self.home}, cwd=self.home)
         t0 = time.monotonic()
-        self.assertEqual(m.tool("recall", cue="hello"), ("memory offline", False))
-        self.assertLess(time.monotonic() - t0, 8)
-        self.assertEqual(m.rpc("ping")["result"], {})
-        m.close()
+        with mock.patch.object(client, "TIMEOUT_MCP", 1.0):
+            self.assertEqual(srv.run_tool("recall", {"cue": "hello"}), ("memory offline", False))
+        self.assertLess(time.monotonic() - t0, 4)
+        self.assertEqual(srv.dispatch("ping", {}), {})
 
 
 if __name__ == "__main__":
