@@ -8,7 +8,6 @@ Wire format: see engram/client.py. Stdlib only.
 """
 import contextlib
 import errno
-import fcntl
 import hashlib
 import hmac
 import ipaddress
@@ -21,6 +20,11 @@ import socket
 import sys
 import threading
 import time
+
+try:  # POSIX only
+    import fcntl
+except ImportError:
+    fcntl = None
 
 from engram import __version__, consolidate, encode, gitctx, recall, vectorize
 from engram.config import MAX_REQUEST_BYTES, ensure_private_dir, home_dir, load_config
@@ -192,6 +196,7 @@ class Engram:
         self.env = os.environ if env is None else env
         self.home = ensure_private_dir(home or home_dir(self.env))
         cfg = load_config(self.env, self.home)
+        warn_reserved(cfg)
         self.sleep_interval = max(0, cfg["ENGRAM_SLEEP_INTERVAL"])
         self.idle_sleep = max(0, cfg["ENGRAM_IDLE_SLEEP"])
         self.clock, self.mono = clock, mono
@@ -832,7 +837,32 @@ class Server:
             return False
 
 
+SUPPORTED = fcntl is not None and hasattr(socket, "AF_UNIX")
+UNSUPPORTED_MSG = "unsupported platform: POSIX only (needs fcntl and AF_UNIX)"
+_reserved_warned = False
+
+
+def warn_reserved(cfg):
+    """One stderr line (once per process) if a reserved, not-yet-implemented option is set."""
+    global _reserved_warned
+    if _reserved_warned:
+        return
+    bad = []
+    if str(cfg.get("ENGRAM_EMBEDDER", "hash")).strip().lower() != "hash":
+        bad.append("ENGRAM_EMBEDDER=%s (only the built-in hash embedder exists)"
+                   % cfg["ENGRAM_EMBEDDER"])
+    if cfg.get("ENGRAM_LLM_CONSOLIDATE"):
+        bad.append("ENGRAM_LLM_CONSOLIDATE (no LLM consolidation exists; the daemon ignores it)")
+    if bad:
+        _reserved_warned = True
+        sys.stderr.write("engram: reserved option(s) not implemented yet, ignored: %s\n"
+                         % "; ".join(bad))
+
+
 def main(argv=None):
+    if not SUPPORTED:
+        sys.stderr.write("engram: %s\n" % UNSUPPORTED_MSG)
+        return 2
     server = Server(None, home=home_dir())
     try:
         if not server.acquire_instance():
