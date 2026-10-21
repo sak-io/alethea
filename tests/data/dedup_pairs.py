@@ -45,3 +45,28 @@ PAIRS = [
 
 # Regression: blending 0.70 / 0.60 as (cos + jac) / 1.4 gives 0.93.
 BLEND_COSINE, BLEND_JACCARD = 0.70, 0.60
+
+# Long-sentence pairs: a single swapped/added token in a ~20+ token sentence.
+# Raw max(cosine, jaccard) is >= 0.88 here, so ONLY the vetoes keep them apart.
+_PRE = "when the release engineering team prepares the weekly rollout for the platform group they"
+_POST = "before the final sign off happens on friday afternoon"
+
+
+def _long(cat, x, y):
+    return (cat, f"{_PRE} {x} {_POST}", f"{_PRE} {y} {_POST}")
+
+
+LONG_PAIRS = [
+    _long("entity", "deploy to staging", "deploy to prod"),
+    _long("negation", "require approval", "require no approval"),
+    _long("negation", "must pass review", "must not pass review"),
+    _long("antonym", "enable auth", "disable auth"),
+    _long("antonym", "allow uploads", "deny uploads"),
+    _long("antonym", "add caching", "remove caching"),
+    _long("identifier", "call the v1 endpoint", "call the v2 endpoint"),
+    _long("identifier", "upload to s3", "upload to s4"),
+    _long("identifier", "triage the p0 bug", "triage the p1 bug"),
+    _long("identifier", "edit /etc/engram/app.conf", "edit /opt/engram/app.conf"),
+    _long("identifier", "call getUserName", "call getUserId"),
+    _long("identifier", "restart svc0000", "restart svc0101"),
+]

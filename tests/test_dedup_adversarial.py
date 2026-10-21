@@ -2,9 +2,13 @@
 
 Skipped until engram.encode.similarity exists (T07 removes the guard).
 """
+import math
+import pathlib
+import re
 import unittest
+from unittest import mock
 
-from tests.data.dedup_pairs import BLEND_COSINE, BLEND_JACCARD, MERGE, PAIRS
+from tests.data.dedup_pairs import BLEND_COSINE, BLEND_JACCARD, LONG_PAIRS, MERGE, PAIRS
 
 try:
     from engram import encode
@@ -34,6 +38,37 @@ def assert_mixed_ids_not_compared(test, compare, vec_a, vec_b):
     test.assertIn(result, (None, 0.0), "vectors with different embedder_id were compared")
 
 
+def _tokens(text):
+    return re.findall(r"[A-Za-z0-9_/.]+", text)
+
+
+def raw_similarity(a, b):
+    """Stdlib raw max(cosine, jaccard) over tokens, vetoes OFF (fixture check)."""
+    ta, tb = _tokens(a), _tokens(b)
+    sa, sb = set(ta), set(tb)
+    jac = len(sa & sb) / len(sa | sb)
+    ca, cb = {t: ta.count(t) for t in sa}, {t: tb.count(t) for t in sb}
+    dot = sum(ca[t] * cb.get(t, 0) for t in ca)
+    cos = dot / (math.sqrt(sum(v * v for v in ca.values())) * math.sqrt(sum(v * v for v in cb.values())))
+    return max(cos, jac)
+
+
+class LongFixtureTest(unittest.TestCase):
+    """Veto-off check: raw score would merge, so only a veto prevents it."""
+
+    def test_long_pairs_raw_score_would_merge(self):
+        for cat, a, b in LONG_PAIRS:
+            with self.subTest(category=cat, b=b):
+                self.assertGreaterEqual(raw_similarity(a, b), 0.88)
+
+
+class SkipGuardTest(unittest.TestCase):
+    def test_suite_not_skipped_once_similarity_exists(self):
+        src = pathlib.Path(__file__).resolve().parent.parent / "engram" / "encode.py"
+        if src.exists() and re.search(r"^def similarity\b", src.read_text(), re.M):
+            self.assertTrue(HAVE_SIM, "similarity is defined; dedup tests must run, remove the skip guard")
+
+
 class BlendRegressionTest(unittest.TestCase):
     def test_blend_would_merge_but_max_does_not(self):
         blend = (BLEND_COSINE + BLEND_JACCARD) / 1.4
@@ -59,6 +94,22 @@ class DedupAdversarialTest(unittest.TestCase):
             for cat, a, b in PAIRS:
                 with self.subTest(embedder=emb, category=cat):
                     self.assertAlmostEqual(sim(a, b, emb), sim(b, a, emb), places=9)
+
+    def test_long_pairs_vetoed_below_threshold(self):
+        for emb in EMBEDDERS:
+            for cat, a, b in LONG_PAIRS:
+                with self.subTest(embedder=emb, category=cat, b=b):
+                    self.assertGreaterEqual(raw_similarity(a, b), encode.NEAR_DUPLICATE)  # veto off would merge
+                    self.assertLess(sim(a, b, emb), encode.NEAR_DUPLICATE)
+
+    def test_stubbed_cosine_jaccard_not_blended(self):
+        if not (hasattr(encode, "cosine") and hasattr(encode, "jaccard")):
+            self.skipTest("encode.cosine/jaccard not exposed")
+        with mock.patch.object(encode, "cosine", return_value=BLEND_COSINE), \
+                mock.patch.object(encode, "jaccard", return_value=BLEND_JACCARD):
+            s = encode.similarity("alpha beta gamma delta", "alpha beta gamma epsilon")
+        self.assertLess(s, encode.NEAR_DUPLICATE)
+        self.assertLessEqual(s, max(BLEND_COSINE, BLEND_JACCARD))
 
     def test_identifier_swap_stays_below_threshold(self):
         for emb in EMBEDDERS:
