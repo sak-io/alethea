@@ -207,6 +207,17 @@ def ping(timeout=TIMEOUT_HOOK, env=None):
     return bool(r.get("ok"))
 
 
+def _open_private(path, flags, mode):
+    """Open/create a file readable only by the owner, whatever the umask or prior mode."""
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | flags, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        return os.fdopen(fd, mode)
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def autostart(env=None, wait=2.0, cmd=None):
     """Spawn the daemon detached if it is down; True if it answers afterwards.
 
@@ -222,7 +233,7 @@ def autostart(env=None, wait=2.0, cmd=None):
             return True
         home = _home(env)
         os.makedirs(home, mode=0o700, exist_ok=True)
-        lock = open(os.path.join(home, "autostart.lock"), "a+")
+        lock = _open_private(os.path.join(home, "autostart.lock"), os.O_APPEND, "a+")
         got = True
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -235,7 +246,7 @@ def autostart(env=None, wait=2.0, cmd=None):
             except OSError:
                 recent = False
             if not recent and not ping(timeout=0.3, env=env):
-                with open(stamp, "w") as f:
+                with _open_private(stamp, os.O_TRUNC, "w") as f:
                     f.write(str(os.getpid()))
                 e = dict(_env(env))
                 pkg_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

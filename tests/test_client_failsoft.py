@@ -251,6 +251,32 @@ class ReplyAndTokenFile(Base):
 
 
 class Autostart(Base):
+    def test_lock_and_stamp_are_0600_under_umask_0(self):
+        import stat
+        lock = os.path.join(self.home, "autostart.lock")  # a loose pre-existing lock is fixed
+        with open(lock, "w"):
+            pass
+        os.chmod(lock, 0o666)
+        old = os.umask(0)
+        try:
+            client.autostart(env=self.env, wait=0.2, cmd=["/nonexistent"])
+        finally:
+            os.umask(old)
+        for name in ("autostart.lock", "autostart.stamp"):
+            mode = stat.S_IMODE(os.stat(os.path.join(self.home, name)).st_mode)
+            self.assertEqual(mode, 0o600, name)
+
+    def test_fresh_lock_and_stamp_are_0600_under_umask_0(self):
+        import stat
+        old = os.umask(0)
+        try:
+            client.autostart(env=self.env, wait=0.2, cmd=["/nonexistent"])
+        finally:
+            os.umask(old)
+        for name in ("autostart.lock", "autostart.stamp"):
+            mode = stat.S_IMODE(os.stat(os.path.join(self.home, name)).st_mode)
+            self.assertEqual(mode, 0o600, name)
+
     def test_noop_in_container_mode(self):
         self.env["ENGRAM_CONTAINER"] = "1"
         t = time.monotonic()
