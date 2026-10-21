@@ -1,18 +1,39 @@
 """Git context: resolve repo_root for a cwd (R6/R7). Fail-soft: never raises."""
 import os
 import subprocess
+import threading
 import time
+from collections import OrderedDict
 
 TIMEOUT = 1.0
 NEG_TTL = 5.0
-_cache = {}
-_neg = {}
+MAX_ENTRIES = 1024  # LRU bound for each cache
+_cache = OrderedDict()
+_neg = OrderedDict()
+_lock = threading.Lock()
 _clock = time.monotonic
 
 
+def _put(cache, key, value):
+    with _lock:
+        cache[key] = value
+        cache.move_to_end(key)
+        while len(cache) > MAX_ENTRIES:
+            cache.popitem(last=False)
+
+
+def _get(cache, key):
+    with _lock:
+        if key in cache:
+            cache.move_to_end(key)
+            return cache[key]
+    return None
+
+
 def cache_clear():
-    _cache.clear()
-    _neg.clear()
+    with _lock:
+        _cache.clear()
+        _neg.clear()
 
 
 def _resolve(real):
@@ -42,17 +63,18 @@ def repo_root(cwd):
     """
     try:
         real = os.path.realpath(cwd)
-        if real in _cache:
-            return _cache[real]
+        hit = _get(_cache, real)
+        if hit is not None:
+            return hit
         now = _clock()
-        t = _neg.get(real)
+        t = _get(_neg, real)
         if t is not None and now - t < NEG_TTL:
             return None
         root = _resolve(real)
         if root is None:
-            _neg[real] = now
+            _put(_neg, real, now)
             return None
-        _cache[real] = root
+        _put(_cache, real, root)
         return root
     except Exception:
         return None
