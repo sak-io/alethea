@@ -134,7 +134,14 @@ class FileTest(unittest.TestCase):
             c = Cortex(p)
             self.assertEqual(c.db.execute("PRAGMA journal_mode").fetchone()[0], "wal")
             self.assertEqual(stat.S_IMODE(os.stat(p.parent).st_mode), 0o700)
+            self.assertEqual(c.db.execute("PRAGMA busy_timeout").fetchone()[0], 5000)
+            for suffix in ("", "-wal", "-shm"):
+                f = str(p) + suffix
+                if os.path.exists(f):
+                    self.assertEqual(stat.S_IMODE(os.stat(f).st_mode), 0o600, f)
             mid = c.insert("identity", "I am Ann")
+            self.assertTrue(c.set_status(mid, "archived"))
+            self.assertFalse(c.set_status("missing", "archived"))
             c.close()
             self.assertEqual(Cortex(p).get(mid)["content"], "I am Ann")
 

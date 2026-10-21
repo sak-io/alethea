@@ -3,6 +3,7 @@
 One connection; the caller holds the lock. No activation logic here.
 """
 import json
+import os
 import sqlite3
 import time
 import uuid
@@ -71,11 +72,13 @@ _COLS = ("id kind content gist keywords salience strength access_count created_a
 class Cortex:
     def __init__(self, path, clock=time.time):
         self.clock = clock
-        if str(path) != ":memory:":
+        on_disk = str(path) != ":memory:"
+        if on_disk:  # bare ':memory:' has no directory/file to protect
             path = Path(path)
             ensure_private_dir(path.parent)
         self.db = sqlite3.connect(str(path), check_same_thread=False)
         self.db.row_factory = sqlite3.Row
+        self.db.execute("PRAGMA busy_timeout=5000")
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.executescript(_SCHEMA)
@@ -87,6 +90,12 @@ class Cortex:
         if self.meta_get("schema_version") is None:
             self.meta_set("schema_version", str(SCHEMA_VERSION))
         self.db.commit()
+        if on_disk:
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.chmod(str(path) + suffix, 0o600)
+                except OSError:
+                    pass
 
     @property
     def schema_version(self):
@@ -133,8 +142,9 @@ class Cortex:
     def set_status(self, mid, status):
         if status not in STATUSES:
             raise ValueError("unknown status: %r" % (status,))
-        self.db.execute("UPDATE memories SET status=? WHERE id=?", (status, mid))
+        cur = self.db.execute("UPDATE memories SET status=? WHERE id=?", (status, mid))
         self.db.commit()
+        return cur.rowcount > 0
 
     def update(self, mid, **fields):
         bad = set(fields) - set(_COLS) - {"id"}
