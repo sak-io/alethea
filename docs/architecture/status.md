@@ -16,7 +16,7 @@ Not done: macOS in the CI matrix (cannot be verified from this environment; the 
 `engram/export.py`, daemon verb `export_rules` (render-only: rejects path/target/dir params, validates repo_root, no file writes), `mnemo export-rules [--target] [--if-changed]`, SessionEnd detached refresh in the hook (only when an export file already exists), refresh after `mnemo forget`/`sleep`. Writes use dir-fd + O_NOFOLLOW, temp+fsync+rename, header ownership check, `.gitignore` append or warning. `encode()` now stamps `meta.deliberate=True` on deliberate writes (the confidence floor is `access_count >= 2` or that flag). Tests: `tests/test_export.py`.
 
 ## Remaining gaps
-- Not built: Claude Code hooks and wiring (T22-T23), embedder plugins and `reembed` (T25-T26), LLM distiller (T27), Docker sidecar (T28), Cursor integration (T29), installer (T30), release docs (T31). Until hooks exist nothing captures or recalls automatically; MCP tools are voluntary.
+- Built: Claude Code hook script (T22) and wiring (T23: `.claude/settings.json` hooks, `.mcp.json`, `integrations/claude-code/`), and `export-rules` sync-back (T24; the CLAUDE.snippet import of `.claude/engram_learned.md` becomes active after the first `mnemo export-rules`). Not built: embedder plugins and `reembed` (T25-T26), LLM distiller (T27), Docker sidecar (T28), Cursor integration (T29), installer (T30), release docs (T31).
 - No real semantic embedder: sem-only matches are weak, so paraphrases without shared words miss ("which database does the billing service use", "how to roll back a bad release").
 - FTS rank fusion ranks by position, not score.
 - Dedup beyond 2000 rows sees only the 2000 newest rows in the FTS channel plus the 600-row vector window (documented trade-off, lessons.md).
