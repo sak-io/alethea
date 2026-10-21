@@ -56,6 +56,41 @@ class GitCtxTest(unittest.TestCase):
                         side_effect=subprocess.TimeoutExpired("git", 1)):
             self.assertIsNone(gitctx.repo_root(self.repo))
 
+    def test_failed_lookup_negative_cached_within_ttl(self):
+        d = os.path.join(self.base, "plain2")
+        os.mkdir(d)
+        self.assertIsNone(gitctx.repo_root(d))
+        with mock.patch("subprocess.run", side_effect=AssertionError):
+            self.assertIsNone(gitctx.repo_root(d))
+        gitctx.cache_clear()
+        with mock.patch("subprocess.run", wraps=subprocess.run) as r:
+            gitctx.repo_root(d)
+        self.assertEqual(r.call_count, 1)
+
+    def test_negative_cache_expires(self):
+        d = os.path.join(self.base, "plain3")
+        os.mkdir(d)
+        with mock.patch.object(gitctx, "_clock", lambda: 100.0):
+            self.assertIsNone(gitctx.repo_root(d))
+        with mock.patch.object(gitctx, "_clock", lambda: 106.0):
+            with mock.patch("subprocess.run", wraps=subprocess.run) as r:
+                gitctx.repo_root(d)
+        self.assertEqual(r.call_count, 1)
+
+    def test_single_git_call(self):
+        with mock.patch("subprocess.run", wraps=subprocess.run) as r:
+            gitctx.repo_root(self.repo)
+        self.assertEqual(r.call_count, 1)
+
+    def test_bare_repo_none(self):
+        b = os.path.join(self.base, "bare.git")
+        git(self.base, "init", "-q", "--bare", b)
+        self.assertIsNone(gitctx.repo_root(b))
+
+    def test_unexpected_exception_none(self):
+        with mock.patch("os.path.realpath", side_effect=RuntimeError):
+            self.assertIsNone(gitctx.repo_root(self.repo))
+
     def test_cache_per_cwd(self):
         self.assertEqual(gitctx.repo_root(self.repo), self.repo)
         with mock.patch("subprocess.run", side_effect=AssertionError):
