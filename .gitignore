@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.engram/
+*.db
+*.db-wal
+*.db-shm
