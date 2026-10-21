@@ -73,13 +73,12 @@ def candidates(cortex, cue, pool=POOL, embedder_id=vectorize.EMBEDDER_ID):
         return []
     pool = max(1, int(pool))
     lex = {}
+    seen = {}  # id -> memory dict fetched once (avoids a second get per hit)
     q = _fts_query(cue)
     if q:
-        active = []
-        for mid in cortex.search_fts(q, limit=pool * 4):
-            m = cortex.get(mid)
-            if m is not None and m["status"] == "active":
-                active.append(mid)
+        hits = cortex.search_fts(q, limit=pool * 4)
+        seen = cortex.get_many(hits)
+        active = [mid for mid in hits if mid in seen and seen[mid]["status"] == "active"]
         n = len(active)
         for i, mid in enumerate(active):
             lex[mid] = 1.0 - i / n
@@ -89,21 +88,30 @@ def candidates(cortex, cue, pool=POOL, embedder_id=vectorize.EMBEDDER_ID):
         "AND vector IS NOT NULL ORDER BY last_access DESC, rowid DESC LIMIT ?",
         (embedder_id, max(pool * 4, 600))).fetchall()
     qv = vectorize.embed(cue)
-    for r in rows:
-        s = vectorize.cosine(qv, r["vector"])
+    for r, s in zip(rows, vectorize.cosine_many(qv, [r["vector"] for r in rows])):
         if s > 0:
             sem[r["id"]] = s
     now = cortex.clock()
+    # score = rel * f with f in [0.55, 1], so score <= rel: visit ids by descending rel
+    # and stop once rel is below the pool-th best score. Exact top-`pool`, but only the
+    # few leading ids pay for a row fetch (was one get() per vector hit).
+    rels = {mid: W_LEX * lex.get(mid, 0.0) + W_SEM * min(1.0, sem.get(mid, 0.0) * SEM_GAIN)
+            for mid in set(lex) | set(sem)}
     out = []
-    for mid in set(lex) | set(sem):
-        m = cortex.get(mid)
+    floor = -1.0
+    for mid in sorted(rels, key=lambda i: (-rels[i], i)):
+        rel = rels[mid]
+        if len(out) >= pool and rel < floor:
+            break
+        m = seen.get(mid) or cortex.get(mid)
         if m is None or m["status"] != "active":
             continue
-        rel = W_LEX * lex.get(mid, 0.0) + W_SEM * min(1.0, sem.get(mid, 0.0) * SEM_GAIN)
         act = cortex.activation(m, now)
         m.update(lex=lex.get(mid, 0.0), sem=sem.get(mid, 0.0), relevance=rel,
                  score=rel * (0.55 + 0.45 * _sigmoid(act)))
         out.append(m)
+        if len(out) >= pool:
+            floor = sorted((x["score"] for x in out), reverse=True)[pool - 1]
     out.sort(key=lambda m: (-m["score"], m["id"]))
     return out[:pool]
 
