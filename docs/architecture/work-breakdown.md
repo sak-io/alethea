@@ -110,6 +110,9 @@ Verify: `python3 -m unittest tests.test_downscale tests.test_recombine -v`
 
 ### T15 sleep_cycle orchestration, triggers, journal purge [lib] tier N
 Goal: R21 + G16 retention.
+
+**Added from T13 review (performance):** the reviewer saw consolidation slow down as memories grow (about 27 ms per episode at 100 memories; 20k journal rows over 4k sessions did not finish in 100 s), likely the encode() dedup scan per write. Before building sleep_cycle, profile it. T15 must include a measurable budget test (e.g. 2k journal rows / 400 sessions consolidate in well under 30 s on 1k existing memories), and if the dedup scan is the cause, bound it (candidate pool cap, vector prefilter) WITHOUT weakening the similarity vetoes or `NEAR_DUPLICATE`.
+
 Files: `engram/consolidate.py` (sleep_cycle with `deep` flag, per-batch lock hooks per ADR 0005), `tests/test_sleep_cycle.py`.
 Details: stages replay -> gist -> downscale -> recombine; `deep=False` skips last two; `session_end` runs consolidate_episodes only; purge consolidated journal rows older than 30 days and unconsolidated older than 90 (plan); stage callbacks allow lock release between batches; idempotent and resumable.
 Reqs: R18, R19, R20, R21, G16. Needs: T13, T14.
