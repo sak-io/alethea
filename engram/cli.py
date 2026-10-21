@@ -75,6 +75,8 @@ def build_parser():
     s = add("recall", "recall memories for a cue")
     s.add_argument("cue", help="cue text, or '-' for stdin")
     s.add_argument("-k", type=_pos_int, default=None, help="max results")
+    s.add_argument("--scope", choices=["all", "repo"], default="all",
+                   help="all (default, same-repo boosted) or repo (only this repo)")
     s.add_argument("--no-reinforce", action="store_true", help="do not strengthen hits")
     s = add("remember", "store a memory")
     s.add_argument("content", help="text, or '-' for stdin")
@@ -213,6 +215,8 @@ def cmd_recall(args):
         p["k"] = args.k
     if args.no_reinforce:
         p["reinforce"] = False
+    if args.scope != "all":
+        p["scope"] = args.scope
 
     def fmt(r):
         for m in r.get("results") or []:
