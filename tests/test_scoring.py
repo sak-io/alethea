@@ -111,5 +111,48 @@ class NoveltyTests(unittest.TestCase):
         self.assertAlmostEqual(encode.novelty(a, lambda t: [b]), 1.0 - encode.similarity(a, b))
 
 
+class AdversarialPerformanceTests(unittest.TestCase):
+    SHAPES = {
+        "comma_digits": "9," * 50000,
+        "letters": "a" * 100000,
+        "spaces": " " * 100000,
+        "bang": "!" * 100000,
+        "negations": "not " * 25000,
+        "digits_unit": "1" * 100000 + "x",
+        "caps": "AB " * 33000,
+        "dots": "1." * 50000,
+        "dollars": "$1" * 50000,
+    }
+    slowest = 0.0
+
+    def _time(self, fn, *a):
+        import time
+        t0 = time.perf_counter()
+        fn(*a)
+        dt = time.perf_counter() - t0
+        type(self).slowest = max(type(self).slowest, dt)
+        self.assertLess(dt, 1.0)
+
+    def test_public_functions_are_fast(self):
+        from engram import markers
+        regexes = ([rx for _, _, rx in markers.AMYGDALA]
+                   + [markers.IDENTITY, markers.RULE, markers.QUANTITY,
+                      markers.CLASS_IDENTITY, markers.CLASS_PROCEDURAL, markers.CLASS_SEMANTIC])
+        for name, text in self.SHAPES.items():
+            for fn in (encode.amygdala, encode.durability, encode.classify):
+                with self.subTest(shape=name, fn=fn.__name__):
+                    self._time(fn, text)
+            with self.subTest(shape=name, fn="novelty"):
+                self._time(encode.novelty, text, lambda t, s=text: [s, "x y"])
+            with self.subTest(shape=name, fn="regexes_clipped"):
+                self._time(lambda: [rx.search(text[:markers.MAX_CHARS]) for rx in regexes])
+        print("slowest adversarial: %.3fs" % type(self).slowest)
+
+    def test_quantity_regex_linear_even_unclipped(self):
+        from engram import markers
+        for text in ("9," * 50000, "1" * 100000 + "x", "1." * 50000, "$1" * 50000):
+            self._time(markers.QUANTITY.search, text)
+
+
 if __name__ == "__main__":
     unittest.main()

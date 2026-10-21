@@ -132,9 +132,13 @@ def _length_adjust(score, text):
 
 
 def amygdala(text):
-    """Affective salience in [0, 1]: summed marker weights, length-adjusted."""
+    """Affective salience in [0, 1]: summed marker weights, length-adjusted.
+
+    Only the first markers.MAX_CHARS characters are scored (cost bound).
+    """
     if not text or not text.strip():
         return 0.0
+    text = text[:markers.MAX_CHARS]
     raw = sum(w for _, w, rx in markers.AMYGDALA if rx.search(text))
     if raw <= 0.0:
         return 0.0
@@ -145,6 +149,7 @@ def durability(text):
     """Union of amygdala() with affect-free durable signals, in [0, 1]."""
     if not text or not text.strip():
         return 0.0
+    text = text[:markers.MAX_CHARS]
     signals = [markers.IDENTITY, markers.DECISION, markers.QUANTITY, markers.CAUSAL, markers.RULE]
     n = sum(1 for rx in signals if rx.search(text))
     content = 0.0
@@ -155,7 +160,7 @@ def durability(text):
 
 def classify(text):
     """Route to a kind: identity, procedural, semantic, else episodic."""
-    t = text or ""
+    t = (text or "")[:markers.MAX_CHARS]
     if markers.CLASS_IDENTITY.search(t):
         return "identity"
     if markers.CLASS_PROCEDURAL.search(t):
@@ -175,10 +180,12 @@ def novelty(text, candidates=None, embedder=None):
         from engram import recall  # deferred: recall imports encode
         candidates = recall.candidates
     items = candidates(text) if callable(candidates) else candidates
+    text = (text or "")[:markers.MAX_CHARS]
     best = 0.0
     for c in items or ():
         if isinstance(c, dict):
             c = c.get("text", "")
+        c = (c or "")[:markers.MAX_CHARS]
         best = max(best, similarity(text, c, embedder=embedder))
     return max(0.0, 1.0 - best)
 
