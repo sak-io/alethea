@@ -45,7 +45,10 @@ UNITS = ["milliseconds", "millisecond", "seconds", "second", "minutes", "minute"
          "msec", "ms", "secs", "sec", "mins", "min", "rps", "qps", "mb", "gb", "kb", "%", "$", "s", "h"]
 _UNIT_ALT = "|".join(re.escape(u) for u in sorted(UNITS, key=len, reverse=True))
 QUANTITY = re.compile(
-    r"(?:\$\s?\d[\d,]*(?:\.\d+)?|\b\d[\d,]*(?:\.\d+)?\s?(?:%|(?:" + _UNIT_ALT + r")\b))", _I)
+    r"(?<![\d,.])(?:\$\s?\d+(?:,\d{3})*(?:\.\d{1,6})?|\d+(?:,\d{3})*(?:\.\d{1,6})?\s?(?:%|(?:" + _UNIT_ALT + r")\b))", _I)
+
+# Scoring functions only look at the first MAX_CHARS characters (ReDoS / cost bound).
+MAX_CHARS = 8192
 
 # classify cues (checked in this order).
 CLASS_IDENTITY = re.compile(r"\b(i\s*am|i'?m|my\s+(role|name|job|title|team)|call\s+me|i\s+(lead|own|manage))\b", _I)
