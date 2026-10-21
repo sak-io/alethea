@@ -145,6 +145,58 @@ class GateTests(unittest.TestCase):
                 self.assertEqual(rb["id"], ra["id"])
                 self.assertEqual(cx.db.execute("SELECT COUNT(*) FROM memories").fetchone()[0], 1)
 
+    def test_threshold_boundary(self):
+        with mock.patch.object(enc, "amygdala", return_value=0.339):
+            self.assertEqual(enc.encode(self.cx, "alpha beta gamma delta")["status"], "rejected")
+        with mock.patch.object(enc, "amygdala", return_value=0.34):
+            self.assertEqual(enc.encode(self.cx, "epsilon zeta eta theta")["status"], "created")
+
+    def test_effective_uses_surprise(self):
+        with mock.patch.object(enc, "amygdala", return_value=0.8):
+            a = enc.encode(self.cx, "alpha beta gamma delta epsilon")
+            self.assertAlmostEqual(self.cx.get(a["id"])["salience"], 0.8)  # surprise 1
+            with mock.patch.object(enc, "similarity", return_value=0.5):
+                b = enc.encode(self.cx, "zeta eta theta iota kappa")
+        self.assertAlmostEqual(self.cx.get(b["id"])["salience"], 0.8 * (0.45 + 0.55 * 0.5))
+
+    def test_explicit_salience_floor_exact(self):
+        with mock.patch.object(enc, "similarity", return_value=0.0):
+            enc.encode(self.cx, "first unrelated seed words here", force=True)
+        with mock.patch.object(enc, "similarity", return_value=0.8):  # surprise 0.2
+            r = enc.encode(self.cx, "second distinct words go here", salience=0.6, force=True)
+        self.assertAlmostEqual(self.cx.get(r["id"])["salience"], 0.6 * 0.9)
+
+    def test_identity_floor_exact(self):
+        with mock.patch.object(enc, "amygdala", return_value=0.1):
+            r = enc.encode(self.cx, "I am the owner of the ledger")
+        self.assertAlmostEqual(self.cx.get(r["id"])["salience"], 0.62)
+
+    def test_deliberate_floor_exact(self):
+        r = enc.remember(self.cx, "quiet plain words about nothing")
+        self.assertAlmostEqual(self.cx.get(r["id"])["salience"], 0.55)
+
+    def test_vectors_of_other_embedder_not_compared(self):
+        self.cx.insert("semantic", STRONG, vector=vectorize.embed(STRONG), embedder_id="other:1")
+        with mock.patch.object(enc, "similarity", side_effect=AssertionError("compared")):
+            r = enc.encode(self.cx, STRONG)
+        self.assertEqual(r["status"], "created")
+
+    def test_input_capped_before_redact_and_journal(self):
+        import time
+        big = ("x" * 99 + " ") * 100000  # ~10 MB
+        t0 = time.time()
+        r = enc.observe(self.cx, big, session_id="s")
+        self.assertLess(time.time() - t0, 1.0)
+        stored = self.cx.journal_pending()[0]["content"]
+        self.assertLessEqual(len(stored.encode()), enc.MAX_TURN_BYTES + len(enc.TRUNCATION_MARKER) + 64)
+        self.assertTrue(stored.endswith(enc.TRUNCATION_MARKER))
+        self.assertIsNotNone(r["journal_id"])
+
+    def test_cap_configurable_by_env(self):
+        with mock.patch.dict("os.environ", {"ENGRAM_MAX_TURN_BYTES": "2048"}):
+            enc.observe(self.cx, "word " * 2000)
+        self.assertLess(len(self.cx.journal_pending()[0]["content"]), 2048 + 64)
+
 
 class RedactionTests(unittest.TestCase):
     def setUp(self):
@@ -177,6 +229,12 @@ class RedactionTests(unittest.TestCase):
         m = self.cx.get(a["id"])
         for f in ("content", "gist", "keywords"):
             self.assertNotIn(AWS_SECRET, m[f])
+
+    def test_metadata_strings_redacted(self):
+        enc.observe(self.cx, "We decided we must never leak keys here", session_id=AWS,
+                    role=AWS, cwd="/x/" + AWS, repo_root="/y/" + AWS)
+        enc.remember(self.cx, "plain deliberate note", session_id=AWS, cwd=AWS, repo_root=AWS)
+        self.assert_clean()
 
     def test_all_fixture_secrets_never_stored(self):
         for kind, text, secret in POSITIVE:
