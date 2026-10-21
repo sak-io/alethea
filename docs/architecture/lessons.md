@@ -8,3 +8,6 @@
 
 ## Known redaction gaps (T11, best-effort; candidates for a later pass)
 glpat-, ya29. OAuth, Azure `AccountKey=`, DigitalOcean `dop_v1_`, Slack webhook URLs, `sshpass -p` / `mysql -pXXX`, very short values under `*_CRED` names. Scoring input is capped at 8192 chars (T08): a marker beyond that point is not scored.
+
+## Test-suite cost
+Worst-case benchmarks in `tests/test_sleep_cycle.py` are opt-in: `ENGRAM_SLOW_TESTS=1 python3 -m unittest discover -s tests -t .` (~+60 s). The default suite stays ~30 s so every task and CI run is cheap. Always-on regression kept: per-episode cost stays flat as memories grow, and the concurrent-writer fairness test.

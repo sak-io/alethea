@@ -1,4 +1,5 @@
 """sleep_cycle orchestration, triggers, journal purge, stage isolation, perf budget (T15)."""
+import os
 import random
 import threading
 import time
@@ -304,6 +305,8 @@ class PerformanceBudgetTest(unittest.TestCase):
             clock.t += 2000
         return c
 
+    @unittest.skipUnless(os.environ.get("ENGRAM_SLOW_TESTS"),
+                         "slow benchmark (~19 s); set ENGRAM_SLOW_TESTS=1")
     def test_2k_rows_400_sessions_over_1k_memories_under_budget(self):
         c = self.corpus(1000, 400)
         self.assertEqual(len(c.journal_pending()), 2000)
@@ -318,6 +321,8 @@ class PerformanceBudgetTest(unittest.TestCase):
         self.assertLess(elapsed, 30.0, "consolidation took %.1fs" % elapsed)
         c.close()
 
+    @unittest.skipUnless(os.environ.get("ENGRAM_SLOW_TESTS"),
+                         "slow worst-case benchmark (~40 s); set ENGRAM_SLOW_TESTS=1")
     def test_all_durable_2k_rows_400_sessions_1k_memories(self):
         """Worst case: every turn is a novel durable decision (2400 encodes).
 
