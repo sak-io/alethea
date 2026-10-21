@@ -1,10 +1,23 @@
-Status: IN REVIEW (T21 end-to-end, recall regression, suite cost)
-Round: 1
-Last review: none
+Status: IN REVIEW (PR #1 whole-branch review; fixes on branch `pr1-fixes`, awaiting re-review and the owner's merge)
+Round: 1 (whole-PR)
+Last review: PR #1 whole-branch review (findings addressed below)
 Updated: 2026-10-21
 
 ## Core complete (through T21)
 Built: cortex (SQLite+FTS5), hashed n-gram vectors, encode gate and dedup, recall with spreading activation, relevance floor, same-repo boost and `scope`, activation/decay, consolidation and sleep cycle, redaction, daemon (Unix + token-authed TCP), fail-soft client, MCP server (stdio), `mnemo` CLI, briefing.
-Tests: default suite 417 tests (4 skipped: opt-in `ENGRAM_SLOW_TESTS`, `ENGRAM_PERF`), ~40 s. New in T21: `scripts/test_e2e.py` (12 tests, real daemon process, three front doors, restart, kill -9, daemon-down), `tests/test_recall_regression.py` (16), `tests/test_mcp_hygiene.py` (4), `tests/test_perf.py` (opt-in; p95 32 ms at 10k).
+Tests: default suite 437 tests (4 skipped: opt-in `ENGRAM_SLOW_TESTS`, `ENGRAM_PERF`), ~40-48 s. Includes `scripts/test_e2e.py` (real daemon process), `scripts/test_concurrency.py` (now via `tests/test_concurrency_wrapper.py`, ~9 s), `tests/test_recall_regression.py`, `tests/test_portability.py`, `tests/test_bench_write.py`.
 Recall corpus (80 memories incl. 20 distractors, 43 cues): recall@3 0.953, top-1 0.884; untuned held-out (30 cues) 0.833; 0 of 19 off-topic/nonsense cues return anything; gates 0.93 / 0.85 / 0.80.
-Known gaps: no real semantic embedder (sem-only matches are weak, so paraphrases without shared words miss: "which database does the billing service use", "how to roll back a bad release"); FTS rank fusion ranks by position, not score; mnemo has no briefing command and MCP has no briefing tool; redaction gaps listed in lessons.md; export-rules/reembed not yet available; hooks, wiring and Phase 3 tasks (T22+) not started.
+
+## PR #1 review follow-ups (this branch)
+Done: honest README and `docs/configuration.md` (every `ENGRAM_*`/`MNEMO_*` variable, plaintext-token warning); POSIX-only guard (`fcntl`/`AF_UNIX`) with clean failure on other platforms; reserved-option warning (`ENGRAM_EMBEDDER`, `ENGRAM_LLM_CONSOLIDATE`); cortex refuses a newer `schema_version`; ADRs 0002-0005 accepted; concurrency script in CI discovery; autostart lock/stamp 0600; gitctx caches LRU-bounded (1024); downscale crash semantics documented; ResourceWarnings fixed; CI timeout and no double runs; write cost made bounded (see lessons.md "Write scaling"); per-task review index in `docs/architecture/reviews/index.md`.
+Not done: macOS in the CI matrix (cannot be verified from this environment; the suite uses only POSIX features so it should work, but untested).
+
+## Remaining gaps
+- Not built: Claude Code hooks and wiring (T22-T23), `export-rules` sync-back (T24), embedder plugins and `reembed` (T25-T26), LLM distiller (T27), Docker sidecar (T28), Cursor integration (T29), installer (T30), release docs (T31). Until hooks exist nothing captures or recalls automatically; MCP tools are voluntary.
+- No real semantic embedder: sem-only matches are weak, so paraphrases without shared words miss ("which database does the billing service use", "how to roll back a bad release").
+- FTS rank fusion ranks by position, not score.
+- Dedup beyond 2000 rows sees only the 2000 newest rows in the FTS channel plus the 600-row vector window (documented trade-off, lessons.md).
+- Redaction gaps listed in lessons.md.
+- mnemo has no briefing command and MCP has no briefing tool; the MCP server does not autostart the daemon.
+- `ENGRAM_EMBEDDER` and `ENGRAM_LLM_CONSOLIDATE` are reserved (not implemented).
+- Windows/other non-POSIX platforms unsupported by design.
