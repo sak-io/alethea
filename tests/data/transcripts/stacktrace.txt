@@ -1,0 +1,20 @@
+The nightly sync job keeps crashing after we upgraded the parser library.
+=====
+Traceback (most recent call last):
+  File "sync/run.py", line 41, in main
+    rows = parse(blob)
+  File "sync/parse.py", line 88, in parse
+    return _decode(blob)
+  File "sync/parse.py", line 12, in _decode
+    raise ValueError(blob[:20])
+ValueError: unexpected token in payload header
+=====
+Error: connect ECONNREFUSED 127.0.0.1:5432
+    at TCPConnectWrap.afterConnect [as oncomplete] (net.js:1141:16)
+    at Pool.connect (pool.js:55:9)
+    at runJob (jobs.js:10:3)
+    at main (index.js:3:1)
+=====
+The root cause is that parser 3.0 rejects payloads without a version header, so we decided to pin parser to 2.9 until the producers are fixed.
+=====
+Rule: never upgrade the parser library without running the replay fixtures first.

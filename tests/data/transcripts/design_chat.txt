@@ -1,0 +1,13 @@
+Hey, so I was thinking about how we store the vectors, what do you think?
+=====
+Honestly I am not sure, there are a few options and they all look fine to me.
+=====
+Well, hashing trick is cheap. We could also try something else later maybe.
+=====
+After comparing both we decided to use a salted blake2b hashing trick for vectors because Python hash() changes with PYTHONHASHSEED.
+=====
+- Vectors are 256 dimensions wide
+- The decision is final: never compare vectors from different embedders
+- Maybe we will revisit the dimensions someday
+=====
+Cool, sounds good, thanks!
