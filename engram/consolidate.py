@@ -35,7 +35,7 @@ def _elapsed_s(raw, now):
         last = float(raw)
     except (TypeError, ValueError):
         return None
-    if not math.isfinite(last) or last > now:
+    if not math.isfinite(last) or last < 0 or last > now:
         return None
     return now - last
 
@@ -89,6 +89,11 @@ def downscale(cortex, now=None, lock=None):
 
 
 def _prune(cortex, now):
+    """Hard-delete eligible archived/suppressed rows.
+
+    Depends on absolute timestamps: a forward clock jump can bulk-delete eligible rows.
+    A row with no archived_at/suppressed_at stamp is stamped with now and kept this sweep.
+    """
     n = 0
     rows = cortex.db.execute(
         "SELECT id, kind, status, access_count, last_access, meta FROM memories "
@@ -109,7 +114,10 @@ def _prune(cortex, now):
         since = meta.get(key)
         if isinstance(since, bool) or not isinstance(since, (int, float)) \
                 or not math.isfinite(since):
-            since = r["last_access"]
+            meta[key] = now
+            cortex.db.execute("UPDATE memories SET meta=? WHERE id=?",
+                              (json.dumps(meta), r["id"]))
+            continue
         if (now - since) / DAY_S >= limit:
             _delete(cortex, r["id"])
             n += 1

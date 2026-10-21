@@ -64,8 +64,42 @@ class DownscaleTest(unittest.TestCase):
         mid = self.c.insert("episodic", "e", strength=4.0)
         self.c.meta_set("last_downscale", "-5")
         r = consolidate.downscale(self.c)
-        self.assertLessEqual(r["periods"], 14.0)  # never more than the cap
-        self.assertGreaterEqual(self.c.get(mid)["strength"], 4.0 * 0.93 ** 14)
+        self.assertEqual(r["periods"], 0.0)
+        self.assertEqual(self.c.get(mid)["strength"], 4.0)
+
+    def test_epoch_zero_marker_capped_at_14_days(self):
+        mid = self.c.insert("episodic", "e", strength=4.0, salience=1.0)
+        self.clock.days(100)
+        self.c.meta_set("last_downscale", "0")
+        r = consolidate.downscale(self.c)
+        self.assertEqual(r["periods"], 14.0)
+        self.assertAlmostEqual(self.c.get(mid)["strength"], 4.0 * 0.93 ** 14, places=6)
+
+    def test_unstamped_suppressed_survives_first_sweep_and_is_stamped(self):
+        a = self.c.insert("semantic", "a")
+        self.c.set_status(a, "suppressed")
+        self.c.update(a, last_access=self.clock.t - 500 * DAY_S)
+        self.assertEqual(consolidate.downscale(self.c)["deleted"], 0)
+        self.assertEqual(self.c.get(a)["meta"]["suppressed_at"], self.clock.t)
+
+    def test_unstamped_archived_survives_first_sweep_and_is_stamped(self):
+        a = self.c.insert("episodic", "a")
+        self.c.set_status(a, "archived")
+        self.c.update(a, last_access=self.clock.t - 500 * DAY_S)
+        self.assertEqual(consolidate.downscale(self.c)["deleted"], 0)
+        self.assertEqual(self.c.get(a)["meta"]["archived_at"], self.clock.t)
+
+    def test_downscale_archive_step_stamps_archived_at(self):
+        mid = self.c.insert("episodic", "a", salience=0.0)
+        self.prime()
+        for _ in range(80):
+            self.clock.days(1)
+            consolidate.downscale(self.c)
+            m = self.c.get(mid)
+            if m["status"] == "archived":
+                self.assertEqual(m["meta"]["archived_at"], self.clock.t)
+                return
+        self.fail("never archived")
 
     def test_period_cap_14_days(self):
         mid = self.c.insert("episodic", "e", strength=4.0, salience=1.0)
@@ -123,9 +157,9 @@ class DownscaleTest(unittest.TestCase):
         i = self.c.insert("identity", "i")
         for m in (a, b, i):
             self.c.set_status(m, "suppressed")
-        self.c.update(a, last_access=self.clock.t - 91 * DAY_S)
-        self.c.update(b, last_access=self.clock.t - 89 * DAY_S)
-        self.c.update(i, last_access=self.clock.t - 900 * DAY_S)
+        self.c.update(a, meta={"suppressed_at": self.clock.t - 91 * DAY_S})
+        self.c.update(b, meta={"suppressed_at": self.clock.t - 89 * DAY_S})
+        self.c.update(i, meta={"suppressed_at": self.clock.t - 900 * DAY_S})
         r = consolidate.downscale(self.c)
         self.assertEqual(r["deleted"], 1)
         self.assertIsNone(self.c.get(a))
