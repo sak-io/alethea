@@ -166,6 +166,8 @@ MAX_SENTENCE_CHARS = 300
 MAX_CANDIDATES = 400
 MAX_SUMMARY_CHARS = 1_500
 LONG_OUTPUT_LINES = 8
+MIN_GIST_DURABILITY = 0.0   # zero-durability lines only fill slots if nothing else qualifies
+MAX_ATTEMPTS = 3
 _FENCES = ("```", "~~~")
 _BULLETS = ("- ", "* ", "+ ", "• ", "– ")
 _DIFF_START = ("diff --git", "@@ ")
@@ -377,7 +379,8 @@ def extract_gist(turns, top=TOP_SENTENCES):
             if key not in seen and len(cands) < MAX_CANDIDATES:
                 seen.add(key)
                 cands.append((s, encode.durability(s), len(cands)))
-    ranked = sorted(cands, key=lambda c: (-c[1], c[2]))
+    useful = [c for c in cands if c[1] > MIN_GIST_DURABILITY]
+    ranked = sorted(useful or cands, key=lambda c: (-c[1], c[2]))
     kept = []
     for s, d, pos in ranked:
         w = _words(s)
@@ -432,56 +435,106 @@ def _episode_salience(turns):
                default=0.0)
 
 
+def _chunks(ep):
+    """Split an episode into consecutive MAX_EPISODE_TURNS-row sub-episodes."""
+    rows = ep["rows"]
+    if len(rows) <= MAX_EPISODE_TURNS:
+        return [ep]
+    return [_episode(ep["session_id"], rows[i:i + MAX_EPISODE_TURNS])
+            for i in range(0, len(rows), MAX_EPISODE_TURNS)]
+
+
+def _meta_del(cortex, *keys):
+    for k in keys:
+        cortex.db.execute("DELETE FROM engram_meta WHERE key=?", (k,))
+    cortex.db.commit()
+
+
 def consolidate_episodes(cortex, distiller=None, lock=None, limit=None):
     """Distil pending journal episodes into an episodic summary + semantic facts.
 
     Everything goes through encode() (redaction, dedup vetoes, thresholds). Journal rows
-    are marked consolidated only after the episode is written; a failure leaves them
-    pending for retry. Returns dict(episodes, skipped, summaries, facts, errors).
+    are marked consolidated only after the episode (or 100-turn chunk) is written; a
+    failure leaves them pending for retry. Writes are checkpointed in engram_meta so a
+    retry does not re-reinforce finished steps, and after MAX_ATTEMPTS failures the
+    episode is poisoned and skipped. Returns dict(episodes, skipped, summaries, facts,
+    errors, poisoned).
     """
     distiller = distiller or Distiller()
-    out = {"episodes": 0, "skipped": 0, "summaries": 0, "facts": 0, "errors": 0}
+    out = {"episodes": 0, "skipped": 0, "summaries": 0, "facts": 0, "errors": 0,
+           "poisoned": 0}
     with _lock(lock):
         episodes = replay(cortex, limit)
-    for ep in episodes:
-        ids = [r["id"] for r in ep["rows"]]
-        turns = [r["content"] or "" for r in ep["rows"]]
-        out["episodes"] += 1
-        try:
-            with _lock(lock):
-                if (len(turns) < MIN_EPISODE_TURNS
-                        and _episode_salience(turns) < encode.ENCODE_THRESHOLD):
+    for whole in episodes:
+        for ep in _chunks(whole):
+            ids = [r["id"] for r in ep["rows"]]
+            turns = [r["content"] or "" for r in ep["rows"]]
+            tag = str(ids[0])
+            k_poison, k_att, k_prog = ("consol_poison:" + tag, "consol_attempts:" + tag,
+                                       "consol_progress:" + tag)
+            out["episodes"] += 1
+            try:
+                with _lock(lock):
+                    if cortex.meta_get(k_poison):
+                        out["poisoned"] += 1
+                        continue
+                    if (len(turns) < MIN_EPISODE_TURNS
+                            and _episode_salience(turns) < encode.ENCODE_THRESHOLD):
+                        cortex.journal_mark_consolidated(ids)
+                        out["skipped"] += 1
+                        continue
+                    try:
+                        attempts = int(cortex.meta_get(k_att, "0")) + 1
+                    except ValueError:
+                        attempts = 1
+                    if attempts > MAX_ATTEMPTS:
+                        cortex.meta_set(k_poison, "1")
+                        out["poisoned"] += 1
+                        continue
+                    cortex.meta_set(k_att, attempts)
+                    try:
+                        gist = distiller.distill(turns)
+                    except Exception:
+                        gist = extract_gist(turns)
+                    _write_episode(cortex, ep, ids, gist, out, k_prog)
                     cortex.journal_mark_consolidated(ids)
-                    out["skipped"] += 1
-                    continue
-                try:
-                    gist = distiller.distill(turns)
-                except Exception:
-                    gist = extract_gist(turns)
-                _write_episode(cortex, ep, ids, gist, out)
-                cortex.journal_mark_consolidated(ids)
-        except Exception:
-            out["errors"] += 1  # rows stay pending: retried next cycle
+                    _meta_del(cortex, k_att, k_prog)
+            except Exception:
+                out["errors"] += 1  # rows stay pending: retried (up to MAX_ATTEMPTS)
     return out
 
 
-def _write_episode(cortex, ep, ids, gist, out):
+def _progress(cortex, key):
+    try:
+        d = json.loads(cortex.meta_get(key) or "{}")
+        return d if isinstance(d, dict) else {}
+    except ValueError:
+        return {}
+
+
+def _write_episode(cortex, ep, ids, gist, out, key):
     if not gist:
         return
-    text = ("Episode (%d turns): " % len(ids) + " ".join(s for s, _ in gist))[:MAX_SUMMARY_CHARS]
+    prog = _progress(cortex, key)  # {"eid": id, "done": [indexes of finished facts]}
     common = dict(session_id=ep["session_id"], cwd=ep["cwd"], repo_root=ep["repo_root"])
-    res = encode.encode(
-        cortex, text, kind="episodic", force=True,
-        meta={"episode": {"turns": len(ids), "start": ep["start"], "end": ep["end"],
-                          "first_journal_id": ids[0], "last_journal_id": ids[-1]}},
-        **common)
-    if res["status"] == "rejected":
-        return  # nothing storable (empty after redaction)
-    eid = res["id"]
-    if res["status"] == "created":
-        out["summaries"] += 1
-    for s, d in gist:
-        if d < encode.OBSERVE_DURABILITY:
+    eid = prog.get("eid")
+    if eid is None:
+        text = ("Episode (%d turns): " % len(ids)
+                + " ".join(s for s, _ in gist))[:MAX_SUMMARY_CHARS]
+        res = encode.encode(
+            cortex, text, kind="episodic", force=True,
+            meta={"episode": {"turns": len(ids), "start": ep["start"], "end": ep["end"],
+                              "first_journal_id": ids[0], "last_journal_id": ids[-1]}},
+            **common)
+        if res["status"] == "rejected":
+            return  # nothing storable (empty after redaction)
+        eid = res["id"]
+        if res["status"] == "created":
+            out["summaries"] += 1
+        prog = {"eid": eid, "done": []}
+        cortex.meta_set(key, json.dumps(prog))
+    for i, (s, d) in enumerate(gist):
+        if d < encode.OBSERVE_DURABILITY or i in prog["done"]:
             continue
         kind = encode.classify(s)
         r = encode.encode(cortex, s, kind="semantic" if kind == "episodic" else kind, **common)
@@ -489,3 +542,5 @@ def _write_episode(cortex, ep, ids, gist, out):
             if r["status"] == "created":
                 out["facts"] += 1
             cortex.link(r["id"], eid, "abstracts")
+        prog["done"].append(i)
+        cortex.meta_set(key, json.dumps(prog))

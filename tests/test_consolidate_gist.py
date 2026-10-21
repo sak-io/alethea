@@ -67,7 +67,10 @@ class GistFixtureTest(unittest.TestCase):
         g = gist_text("stacktrace.txt")
         self.assertIn("pin parser to 2.9", g)
         self.assertIn("never upgrade the parser", g)
-        self.assertIn("ValueError: unexpected token", g)
+        self.assertIn("ValueError: unexpected token in payload header",
+                      consolidate.prefilter(fixture("stacktrace.txt")[1]))
+        self.assertEqual(consolidate.extract_gist(["ValueError: unexpected token in header"]),
+                         [("ValueError: unexpected token in header", 0.0)])
         self.assertNotIn("File \"sync", g)
         self.assertNotIn("pool.js", g)
 
@@ -99,15 +102,19 @@ class GistFixtureTest(unittest.TestCase):
             for j in range(i + 1, len(words)):
                 self.assertLessEqual(consolidate._jaccard(words[i], words[j]), 0.6)
 
-    def test_top_six_by_durability(self):
-        turns = ["Alpha red tango walked over there.", "Bravo green whisky sang loudly today.",
-                 "Charlie blue sierra jumped quickly again.", "Delta amber yankee waited calmly outside.",
-                 "Echo violet zulu painted slowly upstairs.", "Foxtrot black papa laughed gently overhead.",
-                 "Golf white romeo whispered softly downstairs."]
-        turns.append("Never commit secrets because the key leaked last week.")
-        g = [s for s, _ in consolidate.extract_gist(turns)]
+    def test_top_six_by_durability_and_zero_durability_excluded(self):
+        durable = ["We decided to use redis for caching because it is faster.",
+                   "Never deploy on fridays, the outage cost us 4 hours.",
+                   "Always rotate credentials monthly since the breach happened.",
+                   "The parser must reject payloads over 1 MB due to memory limits.",
+                   "I prefer tabs over spaces in every Makefile we write.",
+                   "Rule: migrations run before the service restarts, otherwise data corrupts.",
+                   "We chose sqlite instead of postgres because deployment is simpler."]
+        turns = ["Alpha red tango walked over there.", "ran make build"] + durable
+        g = consolidate.extract_gist(turns)
         self.assertEqual(len(g), 6)
-        self.assertIn("Never commit secrets because the key leaked last week.", g)
+        self.assertTrue(all(d > 0 for _, d in g))
+        self.assertNotIn("ran make build", [s for s, _ in g])
 
 
 class AdversarialTest(unittest.TestCase):
@@ -226,6 +233,50 @@ class ConsolidateTest(unittest.TestCase):
         n = self.c.db.execute(
             "SELECT COUNT(*) FROM memories WHERE content LIKE 'Episode%'").fetchone()[0]
         self.assertEqual(n, 1)
+
+    def test_long_episode_is_chunked_not_truncated(self):
+        n = consolidate.MAX_EPISODE_TURNS
+        self.feed(["We decided to adopt tool%d because it is faster." % i
+                   for i in range(n)], step=1)
+        self.feed(["Never skip the review of step%d, it caused outages." % i
+                   for i in range(30)], step=1)
+        r = consolidate.consolidate_episodes(self.c)
+        self.assertEqual((r["summaries"], r["errors"]), (2, 0))
+        self.assertEqual(self.c.journal_pending(), [])
+
+    def _failing_link(self):
+        real = self.c.link
+
+        def boom(*a, **kw):
+            raise RuntimeError("link failed")
+        self.c.link = boom
+        return real
+
+    def test_retries_do_not_inflate_strength_and_poison_after_cap(self):
+        turns = fixture("design_chat.txt")
+        self.feed(turns, session="old")
+        consolidate.consolidate_episodes(self.c)
+        mid = self.c.db.execute("SELECT id FROM memories WHERE content LIKE 'Episode%'"
+                                ).fetchone()["id"]
+        self.clock.t += 10 * consolidate.EPISODE_GAP
+        self.feed(turns, session="new")  # same text: summary dedups -> one reinforcement
+        before = self.c.get(mid)["strength"]
+        self._failing_link()
+        for _ in range(consolidate.MAX_ATTEMPTS + 1):
+            r = consolidate.consolidate_episodes(self.c)
+        after = self.c.get(mid)["strength"]
+        self.assertLessEqual(after - before, encode.REINFORCE_STEP + 1e-9)
+        self.assertEqual(r["poisoned"], 1)
+        self.assertGreater(len(self.c.journal_pending()), 0)
+        # a poisoned episode is no longer attempted
+        calls = []
+        real = encode.encode
+        encode.encode = lambda *a, **k: calls.append(1) or real(*a, **k)
+        try:
+            consolidate.consolidate_episodes(self.c)
+        finally:
+            encode.encode = real
+        self.assertEqual(calls, [])
 
     def test_distiller_failure_falls_back_to_extractive(self):
         class Bad(consolidate.Distiller):
