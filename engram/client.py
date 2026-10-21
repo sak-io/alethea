@@ -22,6 +22,7 @@ TIMEOUT_CLI = 10.0
 MAX_RESPONSE_BYTES = 8 << 20
 MAX_REQUEST_BYTES = 1 << 20
 AUTOSTART_COOLDOWN_S = 10.0
+_warned_token = False
 _LOOPBACK = ("127.0.0.1", "localhost", "::1")
 
 
@@ -45,8 +46,16 @@ def _token(env, home):
     tok = _env(env).get("ENGRAM_TOKEN")
     if tok:
         return tok
+    path = os.path.join(home, "token")
     try:
-        with open(os.path.join(home, "token"), encoding="utf-8") as f:
+        if os.stat(path).st_mode & 0o077:  # group/world-readable: do not trust or send
+            global _warned_token
+            if not _warned_token:
+                _warned_token = True
+                sys.stderr.write("engram: ignoring token file with loose permissions "
+                                 "(chmod 600 it)\n")
+            return None
+        with open(path, encoding="utf-8") as f:
             return f.read(512).strip() or None
     except OSError:
         return None
@@ -150,6 +159,8 @@ def call(verb, params=None, timeout=TIMEOUT_HOOK, env=None):
             except Exception:
                 continue
             if isinstance(resp, dict):
+                if "ok" not in resp:  # valid JSON but not our protocol
+                    continue
                 return resp
         return _offline()
     except BaseException as e:  # only interpreter-exit signals may propagate

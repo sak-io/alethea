@@ -185,6 +185,7 @@ class Tcp(Base):
             json.dump({"host": "127.0.0.1", "port": s.port}, f)
         with open(os.path.join(self.home, "token"), "w") as f:
             f.write("filetoken-1234567890\n")
+        os.chmod(os.path.join(self.home, "token"), 0o600)
         self.assertTrue(client.call("ping", env=self.env)["ok"])
         self.assertEqual(s.seen[0]["token"], "filetoken-1234567890")
 
@@ -216,6 +217,37 @@ class Tcp(Base):
     def test_token_never_in_offline_result(self):
         self.env.update(ENGRAM_TOKEN="topsecrettopsecret", ENGRAM_PORT="1")
         self.assertNotIn("topsecret", repr(client.call("ping", env=self.env)))
+
+
+class ReplyAndTokenFile(Base):
+    def test_reply_without_ok_key_is_offline(self):
+        for body in (b'{"hello":"world"}\n', b'{}\n', b'{"error":"x"}\n'):
+            s = self.serve(lambda c, b=body: (c.sendall(b), c.close()))
+            self.assertOffline(client.call("ping", env=self.env))
+            s.close()
+            os.unlink(os.path.join(self.home, "engram.sock"))
+
+    def _token_path(self, mode):
+        p = os.path.join(self.home, "token")
+        with open(p, "w") as f:
+            f.write("filetoken-1234567890\n")
+        os.chmod(p, mode)
+
+    def test_loose_token_file_ignored_and_never_echoed(self):
+        s = self.serve(ok_handler)
+        for mode in (0o640, 0o644):
+            self._token_path(mode)
+            r = client.call("ping", env=self.env)
+            self.assertTrue(r["ok"])
+            self.assertNotIn("filetoken", repr(r))
+        self.assertTrue(s.seen)
+        self.assertTrue(all("token" not in req for req in s.seen))
+
+    def test_private_token_file_used(self):
+        s = self.serve(ok_handler)
+        self._token_path(0o600)
+        self.assertTrue(client.call("ping", env=self.env)["ok"])
+        self.assertEqual(s.seen[0]["token"], "filetoken-1234567890")
 
 
 class Autostart(Base):
