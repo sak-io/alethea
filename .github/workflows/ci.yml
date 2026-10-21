@@ -10,8 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
+      fail-fast: false   # one failing interpreter must not hide the others' results
       matrix:
-        python-version: ["3.9", "3.x"]
+        python-version: ["3.9", "3.11", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

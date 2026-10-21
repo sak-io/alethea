@@ -1,6 +1,7 @@
 """sleep_cycle orchestration, triggers, journal purge, stage isolation, perf budget (T15)."""
 import os
 import random
+import sys
 import threading
 import time
 import unittest
@@ -449,8 +450,17 @@ class FairnessTest(Base):
         self.assertEqual(self.handoff_violations(FairLock), 0)
 
     def test_handoff_scenario_discriminates_a_plain_rlock(self):
-        """Control: the same scenario FAILS with threading.RLock, so it can tell them apart."""
-        self.assertGreater(self.handoff_violations(threading.RLock), 0)
+        """Control: the same scenario FAILS with threading.RLock, so it can tell them apart.
+
+        This only holds where the interpreter's RLock lets the releasing thread barge past a
+        queued waiter: CPython <= 3.13 (measured ~15 of 15 rounds). On 3.14 a plain RLock
+        happens to hand off to the waiter (0 of 15 rounds), so there is nothing for the
+        control to detect and it is skipped there. FairLock's own hand-off and FIFO
+        guarantees (the tests above and below) run on every version."""
+        violations = self.handoff_violations(threading.RLock)
+        if sys.version_info >= (3, 14) and violations == 0:
+            self.skipTest("this Python's RLock already hands off to a queued waiter (3.14+)")
+        self.assertGreater(violations, 0)
 
     def test_writer_not_starved_by_tight_release_reacquire_hog(self):
         """Hog loops release/acquire (2 ms of work per hold, no sleeps); four writers must

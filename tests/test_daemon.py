@@ -201,9 +201,23 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(client.ping(env=self.d.env))
 
     def test_deeply_nested_json_gets_reply(self):
+        """Depth 10000 raises RecursionError on CPython <= 3.13 ("invalid json") but parses on
+        3.14+ (then it is a valid JSON non-object). Either way the client must get a structured
+        error and the server must survive."""
         buf = raw(self.d.home, b"[" * 10000 + b"]" * 10000 + b"\n")
-        self.assertEqual(json.loads(buf), {"ok": False, "error": "invalid json"})
+        r = json.loads(buf)
+        self.assertIs(r["ok"], False)
+        self.assertIn(r["error"], ("invalid json", "request must be an object"))
         self.assertTrue(client.ping(env=self.d.env))
+
+    def test_very_deeply_nested_json_hits_recursion_path_on_every_python(self):
+        """400000 levels (800 KB, under the 1 MB request cap) raises RecursionError on every
+        supported CPython, so this always exercises the RecursionError -> "invalid json" reply."""
+        for payload in (b"[" * 400000 + b"]" * 400000,
+                        b'{"verb":"ping","x":' + b"[" * 400000 + b"]" * 400000 + b"}"):
+            buf = raw(self.d.home, payload + b"\n")
+            self.assertEqual(json.loads(buf), {"ok": False, "error": "invalid json"})
+            self.assertTrue(client.ping(env=self.d.env))
 
     def test_exception_in_verb_does_not_kill_server(self):
         self.d.engram.verbs["boom"] = lambda p: 1 / 0
