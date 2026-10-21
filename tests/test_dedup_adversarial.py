@@ -2,12 +2,12 @@
 
 Skipped until engram.encode.similarity exists (T07 removes the guard).
 """
-import math
 import pathlib
 import re
 import unittest
 from unittest import mock
 
+from engram import vectorize
 from tests.data.dedup_pairs import BLEND_COSINE, BLEND_JACCARD, LONG_PAIRS, MERGE, PAIRS
 
 try:
@@ -38,19 +38,9 @@ def assert_mixed_ids_not_compared(test, compare, vec_a, vec_b):
     test.assertIn(result, (None, 0.0), "vectors with different embedder_id were compared")
 
 
-def _tokens(text):
-    return re.findall(r"[A-Za-z0-9_/.]+", text)
-
-
 def raw_similarity(a, b):
-    """Stdlib raw max(cosine, jaccard) over tokens, vetoes OFF (fixture check)."""
-    ta, tb = _tokens(a), _tokens(b)
-    sa, sb = set(ta), set(tb)
-    jac = len(sa & sb) / len(sa | sb)
-    ca, cb = {t: ta.count(t) for t in sa}, {t: tb.count(t) for t in sb}
-    dot = sum(ca[t] * cb.get(t, 0) for t in ca)
-    cos = dot / (math.sqrt(sum(v * v for v in ca.values())) * math.sqrt(sum(v * v for v in cb.values())))
-    return max(cos, jac)
+    """Raw max(cosine, jaccard) from engram.vectorize, vetoes OFF (fixture check)."""
+    return max(vectorize.cosine(vectorize.embed(a), vectorize.embed(b)), vectorize.jaccard(a, b))
 
 
 class LongFixtureTest(unittest.TestCase):
