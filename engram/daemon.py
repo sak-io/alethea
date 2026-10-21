@@ -287,8 +287,13 @@ class Engram:
     def v_recall(self, p):
         cue = _str(p, "cue", maxlen=MAX_CUE_CHARS) or _str(p, "query", True, MAX_CUE_CHARS)
         k = int(_num(p, "k", 1, MAX_K, recall.K))
+        scope = _str(p, "scope", maxlen=16) or "all"
+        if scope not in recall.SCOPES:
+            raise BadRequest("scope must be one of: all, repo")
+        root, cwd = self._scope(p)
         with self.lock:
-            res = recall.recall(self.cortex, cue, k=k, reinforce=_bool(p, "reinforce", True))
+            res = recall.recall(self.cortex, cue, k=k, reinforce=_bool(p, "reinforce", True),
+                                repo_root=root, cwd=cwd, scope=scope)
         return {"ok": True, "results": [_public(m) for m in res]}
 
     def v_briefing(self, p):

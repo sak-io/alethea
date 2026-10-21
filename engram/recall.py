@@ -16,6 +16,18 @@ POOL = 20
 W_LEX, W_SEM, SEM_GAIN = 0.55, 0.45, 1.8
 HIT_BOOST, SPREAD_BOOST = 0.6, 0.35
 SPREAD_TOP, SPREAD_DAMP = 3, 0.5
+# Relevance floor for semantic-only hits (no lexical match). The hashed n-gram embedder has
+# no real semantics: on tests/data/recall_corpus.py unrelated text scores cosine 0.05-0.41
+# (short cues reach 0.33) while genuine sem-only matches (morphological variants, typos)
+# sit well above 0.5. A sem-only hit must reach SEM_MIN_COS; relevance is monotonic in
+# cosine (0.45 * min(1, cos * SEM_GAIN)), so the equivalent relevance floor is REL_MIN.
+# The initial guess (cos 0.10 / rel 0.05) still let nonsense through. Never applied to
+# lexical hits.
+SEM_MIN_COS = 0.45
+REL_MIN = W_SEM * min(1.0, SEM_MIN_COS * SEM_GAIN)
+# Same-repo soft boost: multiplies the score; activation/relevance still dominate.
+SCOPE_BOOST = 1.15
+SCOPES = ("all", "repo")
 
 STOPWORDS = frozenset(
     "a an the and or but if of to in on at by for with from as is are was were be been "
@@ -62,11 +74,12 @@ def _sigmoid(x):
     return e / (1.0 + e)
 
 
-def candidates(cortex, cue, pool=POOL, embedder_id=vectorize.EMBEDDER_ID):
+def candidates(cortex, cue, pool=POOL, embedder_id=vectorize.EMBEDDER_ID, relevance_floor=True):
     """Fused, scored active memories (dicts + lex/sem/relevance/score), best first.
 
     No reinforcement. Vector channel: only rows with the same embedder_id among the
-    max(pool*4, 600) most recently touched; FTS covers the whole corpus.
+    max(pool*4, 600) most recently touched; FTS covers the whole corpus. `relevance_floor=False`
+    disables the semantic-only relevance floor (encode's novelty/dedup wants every neighbour).
     """
     cue = _cap(cue)
     if not cue.strip():
@@ -101,6 +114,8 @@ def candidates(cortex, cue, pool=POOL, embedder_id=vectorize.EMBEDDER_ID):
     floor = -1.0
     for mid in sorted(rels, key=lambda i: (-rels[i], i)):
         rel = rels[mid]
+        if relevance_floor and mid not in lex and sem.get(mid, 0.0) < SEM_MIN_COS:
+            continue
         if len(out) >= pool and rel < floor:
             break
         m = seen.get(mid) or cortex.get(mid)
@@ -158,16 +173,36 @@ def _identity_rows(cortex, k):
     return rows[:k]
 
 
-def recall(cortex, cue, k=K, pool=POOL, reinforce=True, embedder_id=vectorize.EMBEDDER_ID):
-    """Return up to k results, each with `via` in {identity, hit, spread}; reinforce them."""
+def recall(cortex, cue, k=K, pool=POOL, reinforce=True, embedder_id=vectorize.EMBEDDER_ID,
+           repo_root=None, cwd=None, scope="all"):
+    """Return up to k results, each with `via` in {identity, hit, spread}; reinforce them.
+
+    Same-repo hits get a SCOPE_BOOST score multiplier (soft); scope="repo" additionally
+    drops everything not in the session's repo/cwd (hard filter).
+    """
     k = max(1, int(k))
+    if scope not in SCOPES:
+        raise ValueError("scope must be one of %s" % ", ".join(SCOPES))
+    hard = scope == "repo"
+
+    def in_scope(m):
+        return _scope(m, repo_root, cwd) == "repo"
     results, seen = [], set()
     if is_identity_cue(cue):
         for m in _identity_rows(cortex, k):
+            if hard and not in_scope(m):
+                continue
             m["via"] = "identity"
             seen.add(m["id"])
             results.append(m)
     hits = candidates(cortex, cue, pool=pool, embedder_id=embedder_id)
+    if repo_root or cwd:
+        for m in hits:
+            if in_scope(m):
+                m["score"] *= SCOPE_BOOST
+        hits.sort(key=lambda m: (-m["score"], m["id"]))
+    if hard:
+        hits = [m for m in hits if in_scope(m)]
     for m in hits:
         if len(results) >= k:
             break
@@ -179,7 +214,7 @@ def recall(cortex, cue, k=K, pool=POOL, reinforce=True, embedder_id=vectorize.EM
         for m in spread(cortex, hits, limit=k):
             if len(results) >= k:
                 break
-            if m["id"] not in seen:
+            if m["id"] not in seen and not (hard and not in_scope(m)):
                 m["via"] = "spread"
                 seen.add(m["id"])
                 results.append(m)

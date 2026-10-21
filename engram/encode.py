@@ -302,7 +302,7 @@ def _best_duplicate(cortex, content, embedder_id):
     from engram import recall  # deferred: recall imports encode (ADR 0002)
     best, best_m, best_i = 0.0, None, -1
     pool = []
-    for i, m in enumerate(recall.candidates(cortex, content, embedder_id=embedder_id)):
+    for i, m in enumerate(recall.candidates(cortex, content, embedder_id=embedder_id, relevance_floor=False)):
         if m.get("embedder_id") != embedder_id:
             continue  # never compare across embedders
         a, b = content[:markers.MAX_CHARS], (m["content"] or "")[:markers.MAX_CHARS]
