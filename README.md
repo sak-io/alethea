@@ -5,13 +5,13 @@ Long-term memory for AI coding agents, modeled on how human memory works.
 Each AI session keeps its own context window. Engram is the layer that survives after the session ends: it remembers what mattered, abstracts specifics into durable facts, and lets the rest fade. It is a local daemon with a SQLite store, a command-line tool (`mnemo`) and an MCP server.
 
 - Pure Python standard library plus SQLite. No pip installs, no network calls, no embedding API.
-- MCP-capable hosts (Claude Code, Cursor, ...) can call the `recall`, `remember`, `reflect`, `forget` and `engram_status` tools voluntarily today. Automatic, hook-driven capture and recall is not built yet.
+- MCP-capable hosts (Claude Code, Cursor, ...) can call the `recall`, `remember`, `reflect`, `forget` and `engram_status` tools voluntarily today. Claude Code hook wiring now exists (`.claude/settings.json`, `.mcp.json`, see `integrations/claude-code/README.md`): prompts and replies are journaled and a briefing is injected at session start.
 
 ## Status
 
 Built and tested: the core engine (storage, encode gate and dedup, recall, activation and decay, consolidation and sleep cycle, redaction), the daemon (Unix socket, optional token-authenticated TCP), the fail-soft client, the stdio MCP server and the `mnemo` CLI.
 
-Not yet built: Claude Code hooks and settings wiring, `export-rules` sync-back to host rule files (the command exists but reports "not yet available"), `reembed`, and the optional plugins (learned embedder, LLM-assisted consolidation). Recall uses a hashed n-gram embedder, so paraphrases that share no words with a memory can miss.
+Claude Code hooks and wiring are built (T22, T23). Not yet built: `export-rules` sync-back to host rule files (T24; the command exists but reports "not yet available"), `reembed`, and the optional plugins (learned embedder, LLM-assisted consolidation). Recall uses a hashed n-gram embedder, so paraphrases that share no words with a memory can miss.
 
 ## Requirements
 
