@@ -16,7 +16,7 @@ POSITIVE = [
     ("secret_assignment", "password=hunter2xyz", "hunter2xyz"),
     ("secret_assignment", 'api_key: "abcd1234efgh"', "abcd1234efgh"),
     ("secret_assignment", "export ENGRAM_TOKEN=s3cr3tvalue99", "s3cr3tvalue99"),
-    ("high_entropy", "my secret is Zx9Qw8Er7Ty6Ui5Op4As3Df2Gh1Jk0Lm", "Zx9Qw8Er7"),
+    ("high_entropy", "my credential Zx9Qw8Er7Ty6Ui5Op4As3Df2Gh1Jk0Lm", "Zx9Qw8Er7"),
 ]
 NEGATIVE = [
     "We discussed the token bucket algorithm and password policy in prose.",
