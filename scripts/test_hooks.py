@@ -15,7 +15,7 @@ import unittest
 
 from engram import client
 from tests.test_render import HOSTILE, check_context
-from tests.daemon_helpers import ROOT, InProc, make_home, wait_up
+from tests.daemon_helpers import ROOT, InProc, make_home, track_home, wait_up
 
 HOOK = os.path.join(ROOT, "engram", "hooks", "engram_hook.py")
 
@@ -292,7 +292,7 @@ class LiveDaemonTests(unittest.TestCase):
         self.assertTrue(wait_for(lambda: rows(self.home, q, wait=False)[0][0] == 20))
 
     def test_git_worktree_and_non_git_cwd(self):
-        tmp = tempfile.mkdtemp(prefix="egw")
+        tmp = track_home(tempfile.mkdtemp(prefix="egw"))
         self.addCleanup(shutil.rmtree, tmp, True)
         main, wt, plain = (os.path.join(tmp, n) for n in ("main", "wt", "plain"))
         os.mkdir(main)

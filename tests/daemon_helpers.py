@@ -1,6 +1,9 @@
 """Helpers: real daemon on a temp home, in-process (thread) or subprocess."""
+import atexit
+import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -12,8 +15,46 @@ from engram.daemon import Engram, Server
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+_HOMES = []
+
+
 def make_home():
-    return tempfile.mkdtemp(prefix="eg")  # short path: AF_UNIX limit
+    """Short temp home (AF_UNIX path limit), remembered so that any daemon the code under test
+    autostarted there (hooks and mnemo spawn detached daemons on purpose) is stopped when the
+    test process exits instead of leaking."""
+    h = tempfile.mkdtemp(prefix="eg")
+    _HOMES.append(h)
+    return h
+
+
+def track_home(path):
+    """Register a temp home that was not created by make_home() for the same reaping."""
+    _HOMES.append(path)
+    return path
+
+
+def _is_engram_daemon(pid):
+    try:
+        out = subprocess.run(["ps", "-p", str(int(pid)), "-o", "args="], capture_output=True,
+                             text=True, timeout=5).stdout
+    except Exception:
+        return False
+    return "engram.daemon" in out
+
+
+def reap_daemons():
+    """SIGTERM every engram daemon recorded in a tracked home (verified by command line)."""
+    for h in list(_HOMES):
+        try:
+            with open(os.path.join(h, "daemon.json")) as f:
+                pid = json.load(f).get("pid")
+            if pid and _is_engram_daemon(pid):
+                os.kill(int(pid), signal.SIGTERM)
+        except Exception:
+            pass
+
+
+atexit.register(reap_daemons)
 
 
 class InProc:
