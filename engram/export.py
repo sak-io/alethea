@@ -12,8 +12,9 @@ The output flows into always-on prompts (CLAUDE.md `@.claude/engram_learned.md` 
 Cursor alwaysApply rule), so memory is DATA: every line goes through `render` (plain list
 items) under `render.RECALL_HEADER`; frontmatter and headers are fixed text, never memory.
 
-Selection redaction policy: an item is SKIPPED (not rewritten) when the redactor would change
-its text, so a secret that slipped past an older redactor is never exported even masked.
+Selection redaction policy: stored text is already masked at encode time, so such items are
+exported with their [REDACTED:...] markers as stored. An item is SKIPPED (not rewritten) only
+when the redactor would still change the stored text (a secret that older redaction missed).
 """
 import errno
 import os
@@ -40,6 +41,7 @@ FRONTMATTER = ("---\n"
 GITIGNORE_COMMENT = "# Engram generated memory export (commit only if you choose to share it)"
 FORBIDDEN_PARAMS = ("path", "paths", "target", "targets", "dir", "directory", "file", "output")
 
+STALE_TMP_S = 60.0
 _before_rename = None  # test hook: called between temp write and rename
 
 
@@ -118,7 +120,7 @@ def select_items(cortex, repo_root, now=None):
     for _, _, m in ranked:
         raw = " ".join((m.get("gist") or m["content"] or "").split())
         if redact(raw) != raw or redact(m["content"] or "") != (m["content"] or ""):
-            continue  # policy: skip, never export masked text
+            continue  # policy: skip when redaction would still change it (see module doc)
         line = item_text(raw)
         if not line:
             continue
@@ -173,6 +175,24 @@ def _read_existing(dfd, name):
         return f.read(MAX_BYTES * 4).decode("utf-8", "replace")
 
 
+def _sweep_stale_tmp(dfd, name):
+    """Remove our own leftover temp files (.<name>.tmp<digits>) older than STALE_TMP_S."""
+    prefix = ".%s.tmp" % name
+    try:
+        names = os.listdir(dfd)
+    except OSError:
+        return
+    for n in names:
+        if not (n.startswith(prefix) and n[len(prefix):].isdigit()):
+            continue
+        try:
+            st = os.stat(n, dir_fd=dfd, follow_symlinks=False)
+            if stat.S_ISREG(st.st_mode) and time.time() - st.st_mtime > STALE_TMP_S:
+                os.unlink(n, dir_fd=dfd)
+        except OSError:
+            pass
+
+
 def write_target(root, target, items, now, create=True):
     """Write one target under `root`. Returns 'written' | 'unchanged' | 'skipped'.
     Raises Refused (symlink / foreign file) or OSError."""
@@ -187,6 +207,7 @@ def write_target(root, target, items, now, create=True):
             except FileNotFoundError:
                 return "skipped"
             fds.append(cur)
+        _sweep_stale_tmp(cur, name)
         existing = _read_existing(cur, name)
         if existing is None and not create:
             return "skipped"
@@ -228,7 +249,10 @@ def write_target(root, target, items, now, create=True):
 
 def ensure_gitignore(root, targets):
     """Append missing generated paths to root/.gitignore. Returns warning text or ''."""
-    want = ["%s/%s" % TARGETS[t] for t in targets]
+    want = []
+    for t in targets:
+        want.append("%s/%s" % TARGETS[t])
+        want.append("%s/.%s.tmp*" % (TARGETS[t][0], TARGETS[t][1]))
     path = os.path.join(root, ".gitignore")
     try:
         existing = ""
@@ -236,7 +260,7 @@ def ensure_gitignore(root, targets):
             st = os.lstat(path)
             if not stat.S_ISREG(st.st_mode):
                 return ".gitignore is not a regular file; add %s yourself" % ", ".join(want)
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
+            with open(path, "r", encoding="utf-8", errors="replace", newline="") as f:
                 existing = f.read()
         except FileNotFoundError:
             pass
@@ -244,10 +268,11 @@ def ensure_gitignore(root, targets):
         missing = [w for w in want if w not in have]
         if not missing:
             return ""
-        add = ("" if not existing or existing.endswith("\n") else "\n")
-        add += GITIGNORE_COMMENT + "\n" + "".join(w + "\n" for w in missing)
+        eol = "\r\n" if "\r\n" in existing else "\n"
+        add = ("" if not existing or existing.endswith("\n") else eol)
+        add += GITIGNORE_COMMENT + eol + "".join(w + eol for w in missing)
         fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o644)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             f.write(add)
         return ""
     except OSError:

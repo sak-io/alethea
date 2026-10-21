@@ -241,6 +241,28 @@ class Writing(Base):
         self.assertEqual(os.listdir(os.path.join(self.repo, ".claude")),
                          ["engram_learned.md"])
 
+    def test_sweeps_only_stale_own_temp_files(self):
+        d = os.path.join(self.repo, ".claude")
+        os.makedirs(d)
+        stale, fresh = ".engram_learned.md.tmp111", ".engram_learned.md.tmp222"
+        other, link = ".engram_learned.md.tmp.keep", ".engram_learned.md.tmp333"
+        for n in (stale, fresh, other, "engram_learned.md.tmp444"):
+            with open(os.path.join(d, n), "w") as f:
+                f.write("x")
+        victim = os.path.join(self.repo, "victim")
+        with open(victim, "w") as f:
+            f.write("v")
+        os.symlink(victim, os.path.join(d, link))
+        old = time.time() - 120
+        for n in (stale, other, "engram_learned.md.tmp444"):
+            os.utime(os.path.join(d, n), (old, old))
+        os.utime(os.path.join(d, link), (old, old), follow_symlinks=False)
+        self.export()
+        left = set(os.listdir(d))
+        self.assertNotIn(stale, left)
+        self.assertTrue({fresh, other, "engram_learned.md.tmp444", link} <= left)
+        self.assertTrue(os.path.exists(victim))
+
     def test_refuses_to_clobber_hand_written_file(self):
         os.makedirs(os.path.join(self.repo, ".claude"))
         p = os.path.join(self.repo, CLAUDE)
@@ -345,6 +367,10 @@ class Symlinks(Base):
 
 
 class Gitignore(Base):
+    ALL = "".join(l + "\n" for l in (
+        "/" + CLAUDE, ".claude/.engram_learned.md.tmp*", CURSOR,
+        ".cursor/rules/.engram_learned.mdc.tmp*"))
+
     def setUp(self):
         super().setUp()
         self.mem("Billing uses the zebra queue for retries")
@@ -366,9 +392,20 @@ class Gitignore(Base):
 
     def test_existing_entry_not_duplicated(self):
         with open(os.path.join(self.repo, ".gitignore"), "w") as f:
-            f.write("/%s\n%s\n" % (CLAUDE, CURSOR))
+            f.write(self.ALL)
         self.export()
-        self.assertEqual(read(self.repo, ".gitignore"), "/%s\n%s\n" % (CLAUDE, CURSOR))
+        self.assertEqual(read(self.repo, ".gitignore"), self.ALL)
+
+    def test_crlf_gitignore_gets_crlf_lines(self):
+        with open(os.path.join(self.repo, ".gitignore"), "wb") as f:
+            f.write(b"a\r\nb")
+        self.export()
+        with open(os.path.join(self.repo, ".gitignore"), "rb") as f:
+            raw = f.read()
+        self.assertTrue(raw.startswith(b"a\r\nb\r\n"))
+        self.assertNotIn(b"\n", raw.replace(b"\r\n", b""))
+        self.assertIn(CLAUDE.encode() + b"\r\n", raw)
+        self.assertIn(b".claude/.engram_learned.md.tmp*\r\n", raw)
 
     def test_read_only_gitignore_warns_but_exports(self):
         if os.geteuid() == 0:
