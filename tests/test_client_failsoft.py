@@ -185,6 +185,7 @@ class Tcp(Base):
             json.dump({"host": "127.0.0.1", "port": s.port}, f)
         with open(os.path.join(self.home, "token"), "w") as f:
             f.write("filetoken-1234567890\n")
+        os.chmod(os.path.join(self.home, "token"), 0o600)
         self.assertTrue(client.call("ping", env=self.env)["ok"])
         self.assertEqual(s.seen[0]["token"], "filetoken-1234567890")
 
