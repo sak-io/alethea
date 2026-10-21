@@ -168,14 +168,41 @@ class HardeningTests(unittest.TestCase):
             s.close()
         self.assertTrue(client.ping(env=self.d.env))
 
-    def test_connection_cap_replies_busy(self):
-        held = [raw(self.d.home, b"", wait=False) for _ in range(4)]
-        time.sleep(0.2)
-        extra = raw(self.d.home, b'{"verb":"ping"}\n')
-        self.assertIn(b"busy", extra)
-        for s in held:
-            s.close()
-        time.sleep(0.3)
+    def test_idle_sockets_do_not_starve_good_client(self):
+        idle = [raw(self.d.home, b"", wait=False) for _ in range(200)]
+        try:
+            t0 = time.time()
+            r = self.d.call("remember", {"content": "Served despite idle flood fact ee63"},
+                            timeout=2)
+            self.assertTrue(r["ok"], r)
+            self.assertLess(time.time() - t0, 1.0)
+            time.sleep(2.0)  # first-byte deadline reaps the idle sockets
+            for s in idle[:5]:
+                s.settimeout(1)
+                self.assertEqual(s.recv(10), b"")
+        finally:
+            for s in idle:
+                s.close()
+        self.assertTrue(client.ping(env=self.d.env))
+
+    def test_work_slots_exhausted_replies_busy(self):
+        gate = threading.Event()
+        self.d.engram.verbs["block"] = lambda p: gate.wait(10) and {"ok": True}
+        ts = [threading.Thread(target=self.d.call, args=("block", None, 12)) for _ in range(4)]
+        for t in ts:
+            t.start()
+        time.sleep(0.4)
+        try:
+            self.assertIn(b"busy", raw(self.d.home, b'{"verb":"ping"}\n'))
+        finally:
+            gate.set()
+            for t in ts:
+                t.join()
+        self.assertTrue(client.ping(env=self.d.env))
+
+    def test_deeply_nested_json_gets_reply(self):
+        buf = raw(self.d.home, b"[" * 10000 + b"]" * 10000 + b"\n")
+        self.assertEqual(json.loads(buf), {"ok": False, "error": "invalid json"})
         self.assertTrue(client.ping(env=self.d.env))
 
     def test_exception_in_verb_does_not_kill_server(self):
@@ -340,8 +367,9 @@ class ClientMinorTests(unittest.TestCase):
         p = self.home + "/token"
         with open(p, "w") as f:
             f.write("sekret-token-123456")
-        os.chmod(p, 0o644)
-        self.assertIsNone(client._token(self.env, self.home))
+        for mode in (0o644, 0o640):
+            os.chmod(p, mode)
+            self.assertIsNone(client._token(self.env, self.home))
         os.chmod(p, 0o600)
         self.assertEqual(client._token(self.env, self.home), "sekret-token-123456")
 

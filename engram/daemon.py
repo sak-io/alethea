@@ -31,6 +31,8 @@ MAX_K = 50
 DUMP_DEFAULT, DUMP_MAX, DUMP_CONTENT_CHARS = 100, 500, 2000
 READ_TIMEOUT_S = 5.0
 SEND_TIMEOUT_S = 10.0
+FIRST_BYTE_S = 1.5
+SLOT_WAIT_S = 0.25
 MAX_CONNECTIONS = 64
 SLEEP_TICK_S = 1.0
 SLEEP_BUDGET_S = 120.0
@@ -386,7 +388,11 @@ class Server:
         self.sock_path = str(self.home / "engram.sock")
         self.read_timeout = READ_TIMEOUT_S if read_timeout is None else read_timeout
         self.max_request = max_request
+        # `pending` bounds sockets (cheap; idle ones are dropped after FIRST_BYTE_S);
+        # `slots` bounds requests being executed, so idle sockets can never starve work.
+        self.pending = threading.BoundedSemaphore(max(max_conns * 8, 512))
         self.slots = threading.BoundedSemaphore(max_conns)
+        self.first_byte_timeout = min(FIRST_BYTE_S, self.read_timeout)
         self.stop = threading.Event()
         self.listener = None
         self._lockf = None
@@ -429,7 +435,7 @@ class Server:
         finally:
             os.umask(old)
         os.chmod(self.sock_path, 0o600)
-        s.listen(32)
+        s.listen(512)
         s.settimeout(0.5)
         self.listener = s
         self._ensure_token()
@@ -501,14 +507,14 @@ class Server:
                     return
                 time.sleep(0.05)
                 continue
-            if not self.slots.acquire(blocking=False):
+            if not self.pending.acquire(blocking=False):
                 self._reply_close(conn, _err("busy"))
                 continue
             try:
                 threading.Thread(target=self._serve_conn, args=(conn,), daemon=True,
                                  name="conn").start()
             except Exception:
-                self.slots.release()
+                self.pending.release()
                 with contextlib.suppress(Exception):
                     conn.close()
 
@@ -525,7 +531,8 @@ class Server:
 
     def _read_line(self, conn, buf):
         """Return (line_bytes|None, error|None). None/None = clean EOF."""
-        deadline = time.monotonic() + self.read_timeout
+        started = bool(buf)
+        deadline = time.monotonic() + (self.read_timeout if started else self.first_byte_timeout)
         while True:
             nl = buf.find(b"\n")
             if nl >= 0:
@@ -547,6 +554,9 @@ class Server:
             if not chunk:
                 return None, None
             buf += chunk
+            if not started:  # first byte seen: the whole line gets the full deadline
+                started = True
+                deadline = time.monotonic() + self.read_timeout
 
     def _serve_conn(self, conn):
         ctx = ConnCtx("unix")
@@ -561,17 +571,24 @@ class Server:
                     return
                 try:
                     request = json.loads(line.decode("utf-8"))
-                except (ValueError, UnicodeDecodeError):
+                except (ValueError, UnicodeDecodeError, RecursionError):
                     self._send(conn, _err("invalid json"))
                     return
-                if not self._send(conn, handle_request(self.engram, ctx, request)):
+                if not self.slots.acquire(timeout=SLOT_WAIT_S):
+                    self._send(conn, _err("busy"))
+                    return
+                try:
+                    resp = handle_request(self.engram, ctx, request)
+                finally:
+                    self.slots.release()
+                if not self._send(conn, resp):
                     return
         except Exception as e:
             sys.stderr.write("engram: connection error: %s\n" % type(e).__name__)
         finally:
             with contextlib.suppress(Exception):
                 conn.close()
-            self.slots.release()
+            self.pending.release()
 
     @staticmethod
     def _send(conn, resp):

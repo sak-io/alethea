@@ -219,6 +219,37 @@ class Tcp(Base):
         self.assertNotIn("topsecret", repr(client.call("ping", env=self.env)))
 
 
+class ReplyAndTokenFile(Base):
+    def test_reply_without_ok_key_is_offline(self):
+        for body in (b'{"hello":"world"}\n', b'{}\n', b'{"error":"x"}\n'):
+            s = self.serve(lambda c, b=body: (c.sendall(b), c.close()))
+            self.assertOffline(client.call("ping", env=self.env))
+            s.close()
+            os.unlink(os.path.join(self.home, "engram.sock"))
+
+    def _token_path(self, mode):
+        p = os.path.join(self.home, "token")
+        with open(p, "w") as f:
+            f.write("filetoken-1234567890\n")
+        os.chmod(p, mode)
+
+    def test_loose_token_file_ignored_and_never_echoed(self):
+        s = self.serve(ok_handler)
+        for mode in (0o640, 0o644):
+            self._token_path(mode)
+            r = client.call("ping", env=self.env)
+            self.assertTrue(r["ok"])
+            self.assertNotIn("filetoken", repr(r))
+        self.assertTrue(s.seen)
+        self.assertTrue(all("token" not in req for req in s.seen))
+
+    def test_private_token_file_used(self):
+        s = self.serve(ok_handler)
+        self._token_path(0o600)
+        self.assertTrue(client.call("ping", env=self.env)["ok"])
+        self.assertEqual(s.seen[0]["token"], "filetoken-1234567890")
+
+
 class Autostart(Base):
     def test_noop_in_container_mode(self):
         self.env["ENGRAM_CONTAINER"] = "1"
