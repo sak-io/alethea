@@ -23,6 +23,36 @@ def raw_dump(cx):
     return "\n".join(parts)
 
 
+class WriteScalingTests(unittest.TestCase):
+    """The dedup path bounds its FTS channel to the newest DEDUP_FTS_WINDOW rows."""
+
+    def setUp(self):
+        self.cx = Cortex(":memory:")
+        self.addCleanup(self.cx.close)
+
+    def test_dedup_passes_the_window_to_fts(self):
+        enc.remember(self.cx, "We decided to use PostgreSQL for the billing service")
+        calls = []
+        orig = self.cx.search_fts
+
+        def spy(q, limit=20, recent=None):
+            calls.append(recent)
+            return orig(q, limit=limit, recent=recent)
+        with mock.patch.object(self.cx, "search_fts", spy):
+            enc.remember(self.cx, "We decided to use Redis for the cache service")
+        self.assertEqual(calls, [enc.DEDUP_FTS_WINDOW])
+
+    def test_window_does_not_change_dedup_while_store_is_smaller(self):
+        first = enc.remember(self.cx, "We decided to use PostgreSQL for the billing service")
+        for i in range(25):
+            enc.remember(self.cx, "We decided to use tool%d for the service number %d" % (i, i * 7))
+        again = enc.remember(self.cx, "We decided to use PostgreSQL for the billing service")
+        self.assertEqual((again["status"], again["id"]), ("reinforced", first["id"]))
+        with mock.patch.object(enc, "DEDUP_FTS_WINDOW", 5):  # only newest 5 rows via FTS
+            n = enc.remember(self.cx, "We decided to use Kafka for the ingest pipeline")
+        self.assertEqual(n["status"], "created")
+
+
 class GateTests(unittest.TestCase):
     def setUp(self):
         self.t = [1000.0]

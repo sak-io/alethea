@@ -107,6 +107,15 @@ class FtsTest(unittest.TestCase):
         self.c.delete(mid)
         self.assertEqual(self.c.search_fts("redis"), [])
 
+    def test_recent_window_limits_fts_and_is_exact_when_not_hit(self):
+        ids = [self.c.insert("semantic", "shared words item%d" % i) for i in range(30)]
+        every = self.c.search_fts("shared", limit=100)
+        self.assertEqual(sorted(every), sorted(ids))
+        self.assertEqual(self.c.search_fts("shared", limit=100, recent=30), every)  # cap not hit
+        self.assertEqual(self.c.search_fts("shared", limit=100, recent=100), every)
+        self.assertEqual(sorted(self.c.search_fts("shared", limit=100, recent=10)), sorted(ids[-10:]))
+        self.assertEqual(self.c.search_fts("shared", limit=100, recent=0), [ids[-1]])  # clamped to 1
+
     def test_reinforce_does_not_break_fts(self):
         mid = self.c.insert("semantic", "alpha beta")
         self.c.reinforce(mid)

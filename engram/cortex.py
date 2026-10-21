@@ -238,13 +238,21 @@ class Cortex:
         self.db.execute("DELETE FROM memories WHERE id=?", (mid,))
         self.db.commit()
 
-    def search_fts(self, query, limit=20):
+    def search_fts(self, query, limit=20, recent=None):
+        """Ids by FTS rank. `recent=N` ranks only the N newest rows (rowid window): bm25
+        is computed for every matching row, so on a large, word-overlapping corpus the
+        unbounded query is O(n); the window bounds it. Exact when the table has <= N rows."""
         if not self.fts_available:
             return []
+        sql = ("SELECT m.id FROM mem_fts JOIN memories m ON m.rowid=mem_fts.rowid "
+               "WHERE mem_fts MATCH ?")
+        args = [query]
+        if recent is not None:
+            top = self.db.execute("SELECT MAX(rowid) FROM memories").fetchone()[0] or 0
+            sql += " AND mem_fts.rowid > ?"
+            args.append(top - max(1, int(recent)))
         try:
-            rows = self.db.execute(
-                "SELECT m.id FROM mem_fts JOIN memories m ON m.rowid=mem_fts.rowid "
-                "WHERE mem_fts MATCH ? ORDER BY rank LIMIT ?", (query, limit)).fetchall()
+            rows = self.db.execute(sql + " ORDER BY rank LIMIT ?", args + [limit]).fetchall()
         except sqlite3.OperationalError:
             return []
         return [r["id"] for r in rows]
