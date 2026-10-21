@@ -249,6 +249,35 @@ _TRIVIAL = re.compile(
     r"continue|done|hmm+|ah+|oh+|wow|haha+|:\)|👍)[\s.!?,]*$", re.IGNORECASE)
 
 
+def dedup_fts_window():
+    """Rows (newest first, by rowid) the dedup FTS channel may look at. Default
+    DEDUP_FTS_WINDOW; env ENGRAM_DEDUP_FTS_WINDOW overrides (set very large to test whether
+    a suspected missed duplicate is caused by this cap). See docs/adr/0008-dedup-fts-window-cap.md."""
+    try:
+        return max(1, int(os.environ.get("ENGRAM_DEDUP_FTS_WINDOW", DEDUP_FTS_WINDOW)))
+    except ValueError:
+        return DEDUP_FTS_WINDOW
+
+
+def dedup_cap_state(cortex):
+    """Diagnostics for the dedup window cap (shown by `mnemo status`).
+
+    cap_active: the store has more rows than the window, so an old near-duplicate may be
+    outside it. stored_while_capped: memories created while it was active (meta key
+    `dedup_window_capped` holds the window in force); these are the only ones that can be a
+    'second copy' caused by the cap. None when SQLite has no JSON1."""
+    window = dedup_fts_window()
+    top = cortex.db.execute("SELECT MAX(rowid) FROM memories").fetchone()[0] or 0
+    try:
+        n = cortex.db.execute(
+            "SELECT COUNT(*) FROM memories WHERE json_extract(meta,'$.dedup_window_capped') IS NOT NULL"
+        ).fetchone()[0]
+    except Exception:
+        n = None
+    return {"fts_window": window, "newest_rowid": top, "cap_active": top > window,
+            "stored_while_capped": n, "adr": "docs/adr/0008-dedup-fts-window-cap.md"}
+
+
 def max_turn_bytes():
     try:
         return max(1024, int(os.environ.get("ENGRAM_MAX_TURN_BYTES", MAX_TURN_BYTES)))
@@ -307,7 +336,7 @@ def _best_duplicate(cortex, content, embedder_id):
     best, best_m, best_i = 0.0, None, -1
     pool = []
     for i, m in enumerate(recall.candidates(cortex, content, embedder_id=embedder_id, relevance_floor=False,
-                                      fts_window=DEDUP_FTS_WINDOW)):
+                                      fts_window=dedup_fts_window())):
         if m.get("embedder_id") != embedder_id:
             continue  # never compare across embedders
         a, b = content[:markers.MAX_CHARS], (m["content"] or "")[:markers.MAX_CHARS]
@@ -356,12 +385,20 @@ def encode(cortex, content, kind=None, salience=None, force=False, deliberate=Fa
     if effective < ENCODE_THRESHOLD and not (force or deliberate):
         return {"status": "rejected", "reason": "low_salience", "salience": effective}
     session_id, cwd, repo_root = _r(session_id), _r(cwd), _r(repo_root)
+    meta = _redact_meta(meta or {})
+    window = dedup_fts_window()
+    capped = (cortex.db.execute("SELECT MAX(rowid) FROM memories").fetchone()[0] or 0) > window
+    if capped:  # trace: a duplicate of an old memory may have been missed (ADR 0008)
+        meta["dedup_window_capped"] = window
     mid = cortex.insert(
         kind, content, gist=_gist(content), keywords=_keywords(content), salience=effective,
         session_id=session_id, cwd=cwd, repo_root=repo_root,
         vector=vectorize.embed(content), embedder_id=embedder_id,
-        meta=_redact_meta(meta or {}))
-    return {"status": "created", "id": mid, "kind": kind, "salience": effective}
+        meta=meta)
+    res = {"status": "created", "id": mid, "kind": kind, "salience": effective}
+    if capped:
+        res["dedup_window_capped"] = window
+    return res
 
 
 def remember(cortex, content, **kw):

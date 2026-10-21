@@ -159,6 +159,11 @@ def _fmt_status(r):
     _out("last sleep: %s" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ls))
                              if ls else "never"))
     _out("memories: %s   journal pending: %s" % (r.get("total"), r.get("journal_pending")))
+    d = r.get("dedup") or {}
+    if d:
+        _out("dedup window: %s newest rows   cap %s   stored while capped: %s   (see %s)" % (
+            d.get("fts_window"), "ACTIVE" if d.get("cap_active") else "inactive",
+            d.get("stored_while_capped"), d.get("adr")))
     for kind in sorted(r.get("counts") or {}):
         by = r["counts"][kind]
         _out("  %-10s %s" % (kind, "  ".join("%s=%s" % (k, by[k]) for k in sorted(by))))

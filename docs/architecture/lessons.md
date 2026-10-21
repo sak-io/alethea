@@ -45,3 +45,6 @@ Measured ms/write per band (same machine, same script; before = unmodified `auto
 | after | 9.4 | 22.6 | 27.8 | 30.6 |
 
 Before was O(n) (about 3 ms per 1k rows from FTS alone, plus the quadratic floor); after is bounded (the slow rise from 3k to 20k is page-cache and larger-index effects; the FTS window saturates at 2000 rows). Both runs shared the CPU with another job, so absolute numbers are noisy; the shape is the finding.
+
+## Dedup window cap (decision record)
+The 2000-row FTS window in the dedup path is a deliberate, owner-accepted trade-off. Full record, symptoms and how to trace a problem back to it: `docs/adr/0008-dedup-fts-window-cap.md` (`mnemo status` shows the cap state; memories created while capped carry `meta.dedup_window_capped`).

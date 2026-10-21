@@ -372,6 +372,7 @@ class Engram:
                 "SELECT COUNT(*) FROM journal WHERE consolidated=0").fetchone()[0]
             last = self.cortex.meta_get("last_sleep")
             schema = self.cortex.schema_version
+            dedup = encode.dedup_cap_state(self.cortex)
         try:
             last = float(last) if last is not None else None
         except ValueError:
@@ -379,7 +380,7 @@ class Engram:
         return {"ok": True, "version": __version__, "schema_version": schema,
                 "embedder_id": vectorize.EMBEDDER_ID, "fts": self.cortex.fts_available,
                 "counts": counts, "total": sum(sum(v.values()) for v in counts.values()),
-                "journal_pending": pending, "last_sleep": last, "pid": os.getpid(),
+                "journal_pending": pending, "dedup": dedup, "last_sleep": last, "pid": os.getpid(),
                 "uptime_s": round(self.mono() - self.started, 1),
                 "sleep_interval_s": self.sleep_interval, "idle_sleep_s": self.idle_sleep}
 

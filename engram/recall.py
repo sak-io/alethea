@@ -10,6 +10,8 @@ import re
 from engram import vectorize
 
 MAX_CUE_CHARS = 2000
+# Minimum number of most-recently-touched rows the semantic (vector) channel scans (ADR 0008).
+VECTOR_WINDOW_MIN = 600
 MAX_QUERY_TOKENS = 32
 MAX_IDENTITY_CHARS = 200
 K = 8
@@ -128,7 +130,7 @@ def candidates(cortex, cue, pool=POOL, embedder_id=vectorize.EMBEDDER_ID, releva
     rows = cortex.db.execute(
         "SELECT id, vector FROM memories WHERE status='active' AND embedder_id=? "
         "AND vector IS NOT NULL ORDER BY last_access DESC, rowid DESC LIMIT ?",
-        (embedder_id, max(pool * 4, 600))).fetchall()
+        (embedder_id, max(pool * 4, VECTOR_WINDOW_MIN))).fetchall()
     qv = vectorize.embed(cue)
     vecs = [r["vector"] for r in rows]
     for r, s in zip(rows, vectorize.cosine_many(qv, vecs)):
