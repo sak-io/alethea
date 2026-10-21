@@ -23,13 +23,18 @@ engram/
   consolidate.py   sleep_cycle(): replay -> gist -> downscale -> recombine
   vectorize.py     Embedder protocol, hashed n-gram default, stemmer, cosine/jaccard
   gitctx.py        repo_root / repo_common_dir resolution (git rev-parse, fail-soft)
+  export.py        sync-back: render high-confidence memories to host-native markdown rules
   daemon.py        always-on process: socket server, verb dispatch, sleep timer
   client.py        thin fail-soft client used by hooks, MCP server, and mnemo
   mcp_server.py    stdio JSON-RPC MCP server: recall/remember/reflect/forget/engram_status
   hooks/engram_hook.py            involuntary pathway: SessionStart/UserPromptSubmit/Stop/SessionEnd/PreCompact
   scripts/
-    mnemo                     CLI: status/up/sleep/recall/remember/forget/dump
+    mnemo                     CLI: status/up/sleep/recall/remember/forget/dump/export-rules
     test_e2e.py, test_hooks.py, test_concurrency.py, show_mcp.py
+  integrations/
+    claude-code/CLAUDE.snippet.md  directive telling the agent when to recall/remember
+    cursor/mcp.json                MCP registration template
+    cursor/engram.mdc              always-apply rule telling Cursor when to recall/remember
   .mcp.json                      registers the `engram` MCP server for Claude Code
   .claude/settings.json          registers the hook wiring
   Dockerfile, docker-compose.yml sidecar deployment (stdlib-only image, TCP mode)
@@ -261,11 +266,54 @@ The involuntary pathway, wired through `.claude/settings.json` to `SessionStart`
 
 ### `scripts/mnemo`
 
-A CLI over `client.py` with subcommands `status`, `up`, `sleep`, `recall`, `remember`, `forget`, `dump`.
+A CLI over `client.py` with subcommands `status`, `up`, `sleep`, `recall`, `remember`, `forget`, `dump`, `export-rules`.
 
 ### Deployment
 
 Run the daemon directly, or as a Docker sidecar (stdlib-only image, TCP mode). `.mcp.json` registers the `engram` MCP server for Claude Code.
+
+### Host integrations (Claude Code, Cursor)
+
+Both hosts have native, hand-curated instruction files (`CLAUDE.md`; `.cursor/rules/*.mdc`, with `.cursorrules` as the legacy form). Engram does not replace or write into them. The division of labor:
+
+| Layer | Owner | Contents | Changes |
+| :---- | :---- | :---- | :---- |
+| Static ground truth | The user, in native files | Stack, style, build commands, guardrails | By hand, rarely |
+| Dynamic memory | Engram | Decisions, bug causes, procedures, preferences, identity | Reinforced and decayed automatically |
+
+**Capability matrix.** The two hosts do not offer the same pathways, so the integration degrades by capability rather than assuming parity:
+
+| Pathway | Claude Code | Cursor |
+| :---- | :---- | :---- |
+| Voluntary (MCP: recall/remember/reflect/forget) | `.mcp.json` | `.cursor/mcp.json` or `~/.cursor/mcp.json` |
+| Involuntary capture (observe every turn) | Lifecycle hooks | Cursor's hooks, if the installed version provides them; otherwise none (voluntary only) |
+| Session briefing | `SessionStart` hook | No `SessionStart` equivalent: delivered by the sync-back file, which an always-apply rule loads |
+| "When to consult Engram" directive | `CLAUDE.md` snippet | `engram.mdc` with `alwaysApply: true` |
+
+Verify each host's current hook events and output schema against its docs before wiring; they change between versions.
+
+**Claude Code.**
+- `SessionStart` returns the briefing as added context. The documented shape is `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "<briefing>"}}` (or plain stdout). Confirm against the installed version; the hook must still exit 0 with empty output when the daemon is offline.
+- The `CLAUDE.md` snippet is one sentence: call `recall` for unfamiliar domain logic, past architecture decisions, or earlier bug investigations; call `remember` when a decision is finalized or a non-obvious cause is found.
+
+**Cursor.**
+- `mcp.json` launches the stdlib MCP server by absolute path (`python3 /path/to/engram/mcp_server.py`), not `-m engram.mcp_server`, which needs the package on `PYTHONPATH`.
+- `engram.mdc` carries `description`, `alwaysApply: true`, and the same recall/remember directive. Use `.mdc` rules, not the legacy `.cursorrules`.
+- Without a `SessionStart` hook, the agent has no automatic briefing, so the sync-back file below is Cursor's briefing.
+
+**`repo_root` in the MCP server.** The "resolve in the hook process" rule in section 3 does not cover MCP calls, which arrive without hook context. `mcp_server.py` resolves `repo_root` itself from its own working directory at startup (and per call if the host passes a root), using `gitctx.py` and the same fail-soft rules. Both hosts, working in the same repo, therefore read and write the same memories.
+
+#### Sync-back: `mnemo export-rules`
+
+Renders a snapshot of Engram's strongest durable memories into a markdown file the host loads natively. One-way and regenerated, never merged.
+
+- **Selection.** Active semantic and procedural memories for the current `repo_root`, ranked by activation, above a confidence floor (for example `access_count >= 2` or deliberate `remember`), capped at a small count and byte budget (for example 20 items, 4 KB) so it cannot bloat every prompt. Identity memories are excluded by default (see privacy).
+- **Targets.** `.cursor/rules/engram_learned.mdc` (with `alwaysApply: true` frontmatter) and `.claude/engram_learned.md`, which `CLAUDE.md` pulls in with an `@.claude/engram_learned.md` import.
+- **Whole-file ownership.** The file is entirely Engram's: a header says "auto-generated, do not edit", with the generation time. Each export overwrites it atomically (write temp, rename). Never edit inside a hand-written file.
+- **Staleness.** The export is a snapshot and does not decay on its own. Regenerate it on `SessionEnd` and after `sleep`, so a memory that has faded or been forgotten drops out on the next export. `forget` of an exported item should trigger a re-export.
+- **Privacy.** The default target is gitignored (`mnemo export-rules` adds the entry or warns), because memories can name people, incidents, and personal preferences. Committing the file to share with a team is an explicit opt-in, and identity memories are never written to a repo-level file.
+- **Untrusted text.** Exported content flows into an always-on prompt. Only memories that passed the `encode()` gate are eligible, each is length-capped, and exported text is rendered as plain list items, never as headings or fenced instructions.
+- **Fail-soft.** If the daemon is down, `export-rules` leaves the existing file untouched and exits quietly when invoked from a hook.
 
 ## 9. Build order
 
@@ -295,6 +343,8 @@ Write the adversarial dedup tests **before** trusting any similarity-combination
 - **Antonym/negation pairs:** "enable auth" vs "disable auth" and similar must not merge under any embedder.
 - **Distiller:** a failing or malformed LLM response leaves the episode unconsolidated and falls back to extraction; code/trace pre-filtering yields coherent gists on fixture transcripts.
 - **Repo context:** the same repo reached via a subdirectory, a symlink, and a second worktree resolves to one `repo_root`; non-git directories and a missing `git` binary yield `NULL` without error; briefing falls back to `cwd` when `repo_root` is `NULL`.
+- **Host integrations:** the `SessionStart` hook emits valid host JSON and empty output when offline; the MCP server tags memories with `repo_root` so a Claude Code write is recalled from Cursor in the same repo.
+- **Export:** `export-rules` is idempotent and atomic; respects the item and byte caps; omits identity, archived, and forgotten memories; never touches a file it does not own; leaves the old file intact when the daemon is down.
 
 ## 11. Review priorities
 
@@ -308,4 +358,4 @@ Write the adversarial dedup tests **before** trusting any similarity-combination
 
 - Ship the `Embedder` protocol (section 4) with a local-model embedder (ONNX/fastembed, `all-MiniLM-L6-v2`) and a remote-API embedder as optional extras, keeping hashed n-grams as the default. Dedup safety must hold under every embedder.
 - Ship the optional LLM `Distiller` (section 7), starting with the host-agent callback mode.
-- Add a single-command installer to reduce setup friction.
+- Add a single-command installer to reduce setup friction. It should also write the host integration files (MCP registration, directive snippet, hook wiring) for whichever of Claude Code and Cursor it detects.

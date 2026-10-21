@@ -2,7 +2,7 @@
 
 ## 1. What it is
 
-Engram is a long-term memory system for AI coding agents (Claude Code, Codex, Gemini, Grok). It is deliberately modeled on human memory architecture rather than built as a vector-store CRUD app.
+Engram is a long-term memory system for AI coding agents (Claude Code, Cursor, Codex, Gemini, Grok). It is deliberately modeled on human memory architecture rather than built as a vector-store CRUD app.
 
 Each AI session has its own context window, which is ephemeral working memory. Engram is the layer that survives after a session ends and feeds the next one.
 
@@ -48,6 +48,10 @@ Human memory is useful *because* it is lossy in a structured way. It privileges 
 
 **Recalling.** Retrieval fuses keyword match, semantic similarity, and association links. It then weights results by how strongly each memory is currently held, so a decision reinforced last week beats a better textual match left untouched for months.
 
+**Living alongside native memory.** Claude Code and Cursor already have hand-written instruction files (`CLAUDE.md`, `.cursor/rules`). Engram leaves those alone. The split is simple: native files hold *static ground truth* (stack, style, build commands, guardrails) that the user curates; Engram holds *dynamic history* (decisions, bug causes, procedures, preferences) that is reinforced, decays, and is deduplicated automatically. A short directive in the native file tells the agent when to consult Engram.
+
+Engram can also write back. A one-way export renders its strongest, most-reinforced memories for the current repository into a separate auto-generated markdown file that the host loads natively. This is how memory reaches hosts with no session-start hook (Cursor), and it means the best of what Engram has learned is visible and reviewable as plain text. The export is a regenerated snapshot, not a second source of truth, and it is kept out of version control by default because memories can be personal.
+
 ## 5. Design principles
 
 1. **A broken memory must never break the session.** If the memory service is down, slow, or failing, the agent continues as if nothing happened.
@@ -57,7 +61,7 @@ Human memory is useful *because* it is lossy in a structured way. It privileges 
 
 ## 6. Differentiation
 
-- Cross-vendor portability. Memory is exposed over MCP, so it follows an engineer between Claude Code, Codex, Gemini, and Grok.
+- Cross-vendor portability. Memory is exposed over MCP, so it follows an engineer between Claude Code, Cursor, Codex, Gemini, and Grok. Because memories are keyed by repository, work done in Claude Code is recalled in Cursor on the same repo.
 - Engineering-specific encoding: decisions, corrections, causes, constraints, quantitative observations, and incident language are recognized and weighted.
 - A real consolidation cycle, distinct from retrieval, rather than an append-only store.
 
@@ -65,6 +69,7 @@ Human memory is useful *because* it is lossy in a structured way. It privileges 
 
 - Semantic matching uses hashed n-gram vectors by default, not a learned embedding model. It cannot see synonymy ("database wiped" vs "postgres reset") or negation ("enable auth" vs "disable auth"). This is the highest-leverage upgrade path. The `Embedder` is a first-class plugin: users can opt into a local model (for example ONNX or fastembed with `all-MiniLM-L6-v2`) or a remote API. Learned embeddings are not a free fix for negation either, so the duplicate-safety rule holds under every embedder.
 - Consolidation distills by extraction only (no LLM). On noisy coding sessions (stack traces, diffs, terminal output), sentence-ranking heuristics can produce disjointed snippets. An optional, off-by-default LLM-assisted consolidation pass can synthesize structured bullets instead. Extraction remains the default and the fallback.
+- Hosts differ in what they expose. Claude Code offers lifecycle hooks, so capture and briefing are automatic. Cursor is MCP-first: unless its hooks cover it, capture is voluntary only and the briefing arrives through the exported rules file. Cross-vendor parity is best-effort, not guaranteed.
 - Setup involves a daemon, a socket, and hook wiring. That is likely too much friction for a five-minute trial.
 
 ## 8. Direction
