@@ -74,9 +74,9 @@ Non-goals `[C§8]`: multi-tenancy, audit logging, tenant policy, funded/commerci
 A1 Thresholds and weights are constants, tuned by tests `[T preamble]`. A2 Tests run with `unittest` only `[T§1]`. A3 Layout per `[T§2]`; tests live in `scripts/` per source, plus unit tests per module. A4 Codex/Gemini/Grok are supported through the MCP server only, no dedicated integration files. A5 CLI binary is named `mnemo` as in the docs even though the product is Engram.
 
 ## 6. Gaps, ambiguities and contradictions
-1. Concept lists Codex/Gemini/Grok as targets `[C§1,§6]`; tech plan specifies only Claude Code and Cursor. Default: MCP-only for the rest, documented, covered by the generic MCP test.
+1. Concept lists Codex/Gemini/Grok as targets `[C§1,§6]`; tech plan specifies only Claude Code and Cursor. RESOLVED (AGREED by owner): Codex/Gemini/Grok are MCP-only, documented, covered by the generic MCP test.
 2. Strength vs activation: `activation` uses access count `n`, but `downscale` multiplies `strength` and archives by activation `[T§3,§7]`, so decay would not change activation. Default: use `n_eff = strength` (float) in the formula; reinforce increments both.
-3. `reflect` and `forget` semantics undefined `[C§4,T§8]`. Default: `reflect` = deliberate write of a synthesized abstraction (runs `encode()` with deliberate floor, links `abstracts` edges to cited ids); `forget` = status `suppressed` (excluded from recall/export, retained until pruned), not hard delete.
+3. `reflect` and `forget` semantics undefined `[C§4,T§8]`. RESOLVED (AGREED by owner): `reflect` = deliberate write of a synthesized insight (runs `encode()` with deliberate floor, links `abstracts` edges to cited ids); `forget` = status `suppressed` (hidden from recall and export, eligible for later prune), not hard delete.
 4. Status `suppressed` vs `archived` lifecycle and whether archived semantic/procedural memories are ever deleted `[T§3,§7]`. Default: only archived zero-access episodic are hard-deleted; archived others kept and excluded from recall.
 5. Briefing and recall limits (counts, byte size) unspecified `[T§6]`. Default: recall k=8; briefing identity ≤5, semantic+procedural ≤8, episodes ≤3, ≤4 KB.
 6. Does briefing reinforce what it returns? `[T§6]`. Default: no (avoids self-reinforcing loop); only explicit recall reinforces.
@@ -87,13 +87,13 @@ A1 Thresholds and weights are constants, tuned by tests `[T preamble]`. A2 Tests
 11. `ln(age)` undefined at age 0 `[T§3]`. Default: age floored at 1 second.
 12. Activation threshold -3.2 and weights tuned for what time scale is unstated. Default: tests assert behavior on simulated clocks (fake time injection), not raw constants alone.
 13. Verbs missing for features: no daemon verbs for export, reembed, pending-consolidation `[T§8]`. Default: add `export_rules`, `reembed`, `pending`/`consolidate_pending`.
-14. TCP/sidecar mode has no authentication `[T§8 Deployment]`, conflicting with local-data privacy. Default: bind 127.0.0.1 only; compose publishes loopback only; document risk.
+14. TCP/sidecar mode has no authentication `[T§8 Deployment]`, conflicting with local-data privacy. RESOLVED (AGREED by owner): TCP mode binds 127.0.0.1 by default and requires `ENGRAM_TOKEN` in container mode. Architect note: see ADR 0004 (container needs an explicit non-loopback bind inside the container, compose publishes loopback only, daemon refuses to start without a token).
 15. Storage locations, permissions and config file format unspecified; secrets (remote embedder/LLM API keys) handling absent `[T§4,§7]`. Default: `~/.engram/` (0700), env vars preferred, config file 0600, keys never logged or exported.
-16. Journal retention and secret redaction: every turn stored raw `[C§4,T§3]`. Default: redact common secret patterns (keys, tokens, private-key blocks) before journaling; delete consolidated journal rows after 30 days.
+16. Journal retention and secret redaction: every turn stored raw `[C§4,T§3]`. RESOLVED (AGREED by owner): redact common secret patterns (keys, tokens, private-key blocks) before journaling; purge consolidated journal rows after 30 days.
 17. Python minimum version and FTS5 availability unspecified `[T§1]`. Default: Python 3.9+; startup check reports missing FTS5 in `status` and degrades to vector-only without crashing.
 18. Daemon autostart race when two sessions launch simultaneously `[T§8]`. Default: bind failure means another instance won; client retries connect once.
 19. Hook and client timeouts unspecified `[T§8]`. Default: hooks 2 s, MCP calls 5 s, `mnemo` 10 s.
-20. Open decisions in concept `[C§8]`: license, repo structure, traction checklist. Default: Apache-2.0, layout per `[T§2]`, checklist as a doc only (no code).
+20. Open decisions in concept `[C§8]`: license, repo structure, traction checklist. RESOLVED (AGREED by owner): Apache-2.0. Other defaults accepted: layout per `[T§2]` (see ADR 0002), checklist as a doc only (no code).
 21. Installer is "not yet scoped" `[C§8]` yet listed as extension `[T§12]`; owner scope says include. Default: a stdlib `mnemo install` command, P3, per R31.
 22. Remote-API embedder provider unnamed, and remote use contradicts "no network calls" only when enabled `[C§5.3,T§4]`. Default: generic OpenAI-compatible HTTP endpoint via config, off by default.
 23. Many regex/marker lists (trivial chatter, identity cues, decision, causal) are described, not enumerated `[T§5]`. Default: developer defines lists; acceptance via fixture phrase tables committed with tests.
@@ -102,4 +102,4 @@ A1 Thresholds and weights are constants, tuned by tests `[T preamble]`. A2 Tests
 26. Docs name "mnemo" CLI and "Engram" product, and tech §2 layout root is `engram/` while `[T§8]` Cursor path uses `/path/to/engram/mcp_server.py`; the `-m engram.mcp_server` form is rejected for Cursor only. Default: support both entry styles for Claude Code, absolute path for Cursor.
 27. No acceptance numbers for recall quality beyond ranking examples `[T§10]`. Default: a committed fixture corpus with expected top-3 hits as regression gate.
 
-Handoff: From requirements-analyst to architect. Status: spec complete. Open questions needing a human answer: G1, G3, G14, G16, G20 (defaults above proceed otherwise).
+Handoff: From requirements-analyst to architect. Status: spec complete. Owner answered G1, G3, G14, G16, G20 (RESOLVED above); all other gaps: recommended defaults ACCEPTED by owner. V1 scope = everything in the docs. Architect flags G2 as needing a calibration decision (ADR 0003, plan section 3).
