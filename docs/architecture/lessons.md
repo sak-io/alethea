@@ -28,3 +28,13 @@ Measurements (hashed n-gram embedder; corpus 43 cues, untuned held-out 30 cues, 
 
 ## Skipped tests in the default suite (4)
 `ENGRAM_SLOW_TESTS=1`: the 2k-row/400-session benchmark, the all-durable worst case, `test_cost_per_episode_stays_flat_as_memories_grow` (3 in `tests/test_sleep_cycle.py`). `ENGRAM_PERF=1`: `tests/test_perf.py` (1).
+
+## Write scaling (PR #1 review)
+Question: remember() cost "clearly growing with n" (reviewer: ~6.5 ms over the first 1k, ~13 ms average over 1k-10k). Confirmed on a word-overlapping synthetic corpus (`scripts/bench_write.py`: distinct decision-like facts, on-disk store, `encode.remember`). Before: 6.7 ms/write over the first 500, 11.8 at 500-1k, 29 at 1k-2k, 44 at 2k-3k (still rising).
+Causes found with cProfile of the last writes:
+1. **O(corpus): FTS bm25 ranking.** `search_fts ... ORDER BY rank LIMIT 80` scores every matching row; with shared vocabulary every row matches. Measured 6 / 12 / 30 / 59 ms per query at 1k / 3k / 10k / 20k rows (about 3 ms per 1k rows).
+2. **Quadratic in the visited candidates:** `candidates()` re-sorted all scored hits after each append to find the pool-th best score (27M generator steps per 500 writes). Replaced by a min-heap of the best `pool` scores: same floor value, identical results.
+3. **One SELECT per visited candidate** (about 215 per write): now fetched in batches of `PREFETCH` = 32 via `get_many` (a cache only; same results).
+The vector channel was already bounded (600 most recently touched rows via `idx_mem_vec`, about 1 ms to read, 8 ms to score).
+Fix and cap: the dedup path (`encode._best_duplicate`, `relevance_floor=False`) passes `fts_window=DEDUP_FTS_WINDOW` (2000) so FTS ranks only the 2000 newest rows (`rowid` window, `Cortex.search_fts(recent=N)`). Recall (`relevance_floor=True`, default) keeps the whole-corpus FTS channel, unchanged. The cap is not hit while the store has <= 2000 rows, so results there are identical (T21 differential test, dedup and adversarial suites unchanged and green). Beyond 2000 rows a near-duplicate that is neither among the 2000 newest rows nor in the 600-row vector window is not seen and a second copy is stored instead of reinforcing the old one (a false negative, the safe direction per lesson 1).
+After: 9.4 ms at 0-1k, 22.6 at 1k-3k, 27.8 at 3k-10k, 30.6 at 10k-20k (bounded; the remaining slow rise is page-cache and larger-corpus effects). Before at 1k-3k: 33 ms (same run conditions) and rising.
