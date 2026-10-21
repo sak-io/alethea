@@ -80,7 +80,9 @@ class SettingsTest(unittest.TestCase):
             t = h["timeout"]
             self.assertIsInstance(t, int, event)
             self.assertGreaterEqual(t, 2, event)  # hook's own watchdog deadline is 2 s
-            self.assertLessEqual(t, 2 if event == "SessionEnd" else 5, event)
+            if event == "SessionEnd":
+                self.assertGreater(t, 2)  # must not be cancelled at the watchdog instant
+            self.assertLessEqual(t, 3 if event == "SessionEnd" else 5, event)
 
     def test_session_start_matches_all_sources(self):
         for group in self.s["hooks"]["SessionStart"]:
@@ -105,13 +107,31 @@ class SettingsTest(unittest.TestCase):
             self.assertEqual(p.stdout, b"", event)
 
 
+def expand_mcp(s, environ):
+    """`.mcp.json` expansion as documented: ${VAR} and ${VAR:-default}; unset without default
+    is an error (the server would fail to start)."""
+    def sub(m):
+        name, default = m.group(1), m.group(2)
+        if environ.get(name):
+            return environ[name]
+        if default is not None:
+            return default
+        raise AssertionError("unset variable without default: ${%s}" % name)
+    return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}", sub, s)
+
+
 class McpConfigTest(unittest.TestCase):
-    def test_engram_server_launches_and_lists_tools(self):
-        cfg = load(MCP)["mcpServers"]["engram"]
-        argv = [expand(cfg["command"])] + [expand(a) for a in cfg.get("args", [])]
-        self.assertTrue(os.path.isfile(argv[-1]), argv)
+    def cfg(self):
+        return load(MCP)["mcpServers"]["engram"]
+
+    def launch(self, environ, cwd):
+        cfg = self.cfg()
+        argv = [expand_mcp(cfg["command"], environ)] + [expand_mcp(a, environ)
+                                                       for a in cfg.get("args", [])]
         env = env_for(make_home())
-        env.update({k: expand(v) for k, v in cfg.get("env", {}).items()})
+        env.pop("CLAUDE_PROJECT_DIR", None)
+        env.update(environ)
+        env.update({k: expand_mcp(v, environ) for k, v in cfg.get("env", {}).items()})
         msgs = [
             {"jsonrpc": "2.0", "id": 1, "method": "initialize",
              "params": {"protocolVersion": "2025-06-18", "capabilities": {},
@@ -120,15 +140,32 @@ class McpConfigTest(unittest.TestCase):
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
         ]
         data = "".join(json.dumps(m) + "\n" for m in msgs).encode()
-        p = subprocess.run(argv, input=data, cwd=tempfile.gettempdir(), env=env,
-                           capture_output=True, timeout=20)
+        p = subprocess.run(argv, input=data, cwd=cwd, env=env, capture_output=True, timeout=20)
         replies = {}
         for line in p.stdout.decode().splitlines():
             r = json.loads(line)
             replies[r.get("id")] = r
-        self.assertEqual(replies[1]["result"]["serverInfo"]["name"], "engram")
+        self.assertEqual(replies[1]["result"]["serverInfo"]["name"], "engram", p.stderr)
         names = {t["name"] for t in replies[2]["result"]["tools"]}
         self.assertTrue({"recall", "remember"} <= names, names)
+
+    def test_no_bare_project_dir_variable(self):
+        with open(MCP, encoding="utf-8") as f:
+            text = f.read()
+        self.assertNotIn("${CLAUDE_PROJECT_DIR}", text)
+        self.assertIn("${CLAUDE_PROJECT_DIR:-.}", text)
+
+    def test_expansion_helper_fails_on_unset_without_default(self):
+        with self.assertRaises(AssertionError):
+            expand_mcp("${NOPE}/x", {})
+        self.assertEqual(expand_mcp("${NOPE:-.}/x", {}), "./x")
+        self.assertEqual(expand_mcp("${A:-.}/x", {"A": "/r"}), "/r/x")
+
+    def test_launches_with_variable_unset_from_repo_root(self):
+        self.launch({}, ROOT)
+
+    def test_launches_with_variable_set_from_another_cwd(self):
+        self.launch({"CLAUDE_PROJECT_DIR": ROOT}, tempfile.gettempdir())
 
 
 class SnippetTest(unittest.TestCase):
@@ -190,10 +227,14 @@ class ReadmeTest(unittest.TestCase):
 
     def test_json_blocks_parse_and_match_the_documented_shape(self):
         blocks = re.findall(r"```json\n(.*?)```", self.text, re.S)
-        self.assertEqual(len(blocks), 2)
-        hooks = json.loads(blocks[0])["hooks"]
+        parsed = [json.loads(b) for b in blocks]
+        hooks = [x["hooks"] for x in parsed if "hooks" in x][0]
         self.assertEqual(set(hooks), set(EVENTS))
-        self.assertEqual(json.loads(blocks[1])["mcpServers"]["engram"]["command"], "python3")
+        self.assertTrue(any(x.get("mcpServers", {}).get("engram", {}).get("command") == "python3"
+                            for x in parsed))
+        fallback = [x for x in parsed if x.get("type") == "command"]
+        self.assertEqual(len(fallback), 1)
+        self.assertIn("${CLAUDE_PROJECT_DIR}", fallback[0]["command"])
 
 
 if __name__ == "__main__":

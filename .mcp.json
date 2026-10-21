@@ -2,7 +2,7 @@
   "mcpServers": {
     "engram": {
       "command": "python3",
-      "args": ["${CLAUDE_PROJECT_DIR}/engram/mcp_server.py"],
+      "args": ["${CLAUDE_PROJECT_DIR:-.}/engram/mcp_server.py"],
       "env": {}
     }
   }

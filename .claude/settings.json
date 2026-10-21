@@ -67,7 +67,7 @@
             "type": "command",
             "command": "python3",
             "args": ["${CLAUDE_PROJECT_DIR}/engram/hooks/engram_hook.py"],
-            "timeout": 2
+            "timeout": 3
           }
         ]
       }

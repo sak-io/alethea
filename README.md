@@ -5,7 +5,7 @@ Long-term memory for AI coding agents, modeled on how human memory works.
 Each AI session keeps its own context window. Engram is the layer that survives after the session ends: it remembers what mattered, abstracts specifics into durable facts, and lets the rest fade. It is a local daemon with a SQLite store, a command-line tool (`mnemo`) and an MCP server.
 
 - Pure Python standard library plus SQLite. No pip installs, no network calls, no embedding API.
-- MCP-capable hosts (Claude Code, Cursor, ...) can call the `recall`, `remember`, `reflect`, `forget` and `engram_status` tools voluntarily today. Claude Code hook wiring now exists (`.claude/settings.json`, `.mcp.json`, see `integrations/claude-code/README.md`): prompts and replies are journaled and a briefing is injected at session start.
+- MCP-capable hosts (Claude Code, Cursor, ...) can call the `recall`, `remember`, `reflect`, `forget` and `engram_status` tools voluntarily today. Claude Code hook wiring now exists (`.claude/settings.json`, `.mcp.json`, see `integrations/claude-code/README.md`): prompts and replies are journaled and a briefing is injected at session start. Contributors: hooks run in this repo's own sessions and journal your prompts (redacted) to `~/.engram`; opt-out steps are in that README.
 
 ## Status
 
