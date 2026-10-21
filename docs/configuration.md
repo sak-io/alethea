@@ -21,6 +21,7 @@ Boolean variables accept `1`, `true`, `yes`, `on` (case-insensitive); anything e
 | `ENGRAM_IDLE_SLEEP` (file) | `180` | daemon | Seconds of inactivity required before an automatic sleep cycle starts. |
 | `ENGRAM_EMBEDDER` (file) | `hash` | daemon | **Reserved (not yet implemented).** Only the built-in hashed n-gram embedder exists. A non-default value is ignored and the daemon prints one warning to stderr at startup. |
 | `ENGRAM_LLM_CONSOLIDATE` (file) | false | MCP server, daemon | **Reserved (not yet implemented).** No LLM consolidation exists. The only effect today is that the MCP server also advertises the `engram_consolidate_pending` tool (which runs the normal extractive consolidation). The daemon prints one stderr warning if it is set. |
+| `ENGRAM_HOOK_DEBUG` | unset | Claude Code hook | `1` makes `engram/hooks/engram_hook.py` write one diagnostic line to stderr (event outcome and elapsed ms; never prompt text, tokens or memory content). Otherwise the hook is silent: stdout is empty or one JSON object, exit code always 0. |
 | `MNEMO_STRICT` | unset | `mnemo` | `1` makes `mnemo` exit 3 when the daemon is offline and 4 for commands not yet available, instead of exiting 0 (same as `--strict`). |
 | `ENGRAM_SLOW_TESTS` | unset | tests | Any non-empty value enables the slow sleep-cycle benchmarks (about +60 s). |
 | `ENGRAM_PERF` | unset | tests | `1` enables the 10k-memory recall performance test. |
