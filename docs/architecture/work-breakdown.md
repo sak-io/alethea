@@ -152,6 +152,9 @@ Verify: `python3 -m unittest tests.test_cli -v`
 
 ### T21 End-to-end, recall regression corpus, performance [lib] tier N
 Goal: R1 gate, G27, scale NFRs.
+
+**Added from T10 review (MAJOR for retrieval quality):** `recall.candidates()` counts semantic-only hits with cosine ~0.02 as direct hits, so a nonsense cue returns and REINFORCES (+0.6) unrelated memories. Add a relevance floor (drop sem-only hits with cosine < ~0.10 and relevance < ~0.05; do not apply to lexical hits; tune on a real-phrase fixture) and a test that a nonsense cue returns nothing and reinforces nothing.
+
 Files: `scripts/test_e2e.py`, `tests/data/recall_corpus.py` (fixture corpus with expected top-3, includes held-out phrasing), `tests/test_recall_regression.py`, `tests/test_perf.py` (10k memories, recall p95 < 300 ms; skipped unless `ENGRAM_PERF=1` but run once in review).
 Details: remember -> recall -> observe -> sleep -> briefing through a real in-process daemon; run full suite under `tests/netguard.py`.
 Reqs: R1, R15, R17, G27, Scale NFR. Needs: T19, T20.
