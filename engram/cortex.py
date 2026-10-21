@@ -107,6 +107,10 @@ _COLS = ("id kind content gist keywords salience strength access_count created_a
          "last_access status session_id cwd repo_root vector embedder_id meta").split()
 
 
+class SchemaVersionError(RuntimeError):
+    """The database was written by a newer Engram; refuse to open it."""
+
+
 class Cortex:
     def __init__(self, path, clock=time.time):
         self.clock = clock
@@ -120,6 +124,15 @@ class Cortex:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.executescript(_SCHEMA)
+        try:
+            stored = int(self.meta_get("schema_version") or 0)
+        except ValueError:
+            stored = 0
+        if stored > SCHEMA_VERSION:
+            self.db.close()
+            raise SchemaVersionError(
+                "database %s has schema version %d, newer than this Engram supports (%d); "
+                "upgrade Engram or use a different ENGRAM_HOME" % (path, stored, SCHEMA_VERSION))
         self.fts_available = True
         try:
             self.db.executescript(_FTS)

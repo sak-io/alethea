@@ -1,10 +1,12 @@
 import os
+import sqlite3
 import stat
 import tempfile
 import unittest
 from pathlib import Path
 
-from engram.cortex import Cortex, KINDS, DECAY
+from engram.config import SCHEMA_VERSION
+from engram.cortex import Cortex, KINDS, DECAY, SchemaVersionError
 
 
 class Clock:
@@ -148,3 +150,22 @@ class FileTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SchemaVersionTest(unittest.TestCase):
+    def test_newer_schema_is_refused_and_older_or_equal_opens(self):
+        with tempfile.TemporaryDirectory() as t:
+            path = os.path.join(t, "engram.db")
+            c = Cortex(path)
+            c.meta_set("schema_version", str(SCHEMA_VERSION + 1))
+            c.db.commit()
+            c.close()
+            with self.assertRaises(SchemaVersionError) as cm:
+                Cortex(path)
+            self.assertIn("newer", str(cm.exception))
+
+            db = sqlite3.connect(path)
+            db.execute("UPDATE engram_meta SET value=? WHERE key='schema_version'", (str(SCHEMA_VERSION),))
+            db.commit()
+            db.close()
+            Cortex(path).close()
