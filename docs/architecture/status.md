@@ -13,7 +13,7 @@ Done: honest README and `docs/configuration.md` (every `ENGRAM_*`/`MNEMO_*` vari
 Not done: macOS in the CI matrix (cannot be verified from this environment; the suite uses only POSIX features so it should work, but untested).
 
 ## Remaining gaps
-- Not built: Claude Code hooks and wiring (T22-T23), `export-rules` sync-back (T24), embedder plugins and `reembed` (T25-T26), LLM distiller (T27), Docker sidecar (T28), Cursor integration (T29), installer (T30), release docs (T31). Until hooks exist nothing captures or recalls automatically; MCP tools are voluntary.
+- Built: Claude Code hook script (T22) and wiring (T23: `.claude/settings.json` hooks, `.mcp.json`, `integrations/claude-code/`). Not built: `export-rules` sync-back (T24), embedder plugins and `reembed` (T25-T26), LLM distiller (T27), Docker sidecar (T28), Cursor integration (T29), installer (T30), release docs (T31). The CLAUDE.snippet import of `.claude/engram_learned.md` stays inactive until T24 generates the file.
 - No real semantic embedder: sem-only matches are weak, so paraphrases without shared words miss ("which database does the billing service use", "how to roll back a bad release").
 - FTS rank fusion ranks by position, not score.
 - Dedup beyond 2000 rows sees only the 2000 newest rows in the FTS channel plus the 600-row vector window (documented trade-off, lessons.md).
