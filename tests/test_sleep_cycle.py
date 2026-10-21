@@ -418,6 +418,72 @@ class FairnessTest(Base):
             t.join(5)
         self.assertEqual(order, [0, 1, 2])
 
+    @staticmethod
+    def handoff_violations(make_lock, rounds=15):
+        """A holds the lock, B queues, A releases and IMMEDIATELY re-acquires (what a sleep
+        batch loop does). Fair: B gets the lock first. Returns how many rounds A jumped the
+        queue. Measured: FairLock 0 of 15; plain RLock ~15 of 15 (the control test below)."""
+        bad = 0
+        for _ in range(rounds):
+            lk, order, queued = make_lock(), [], threading.Event()
+            lk.acquire()
+
+            def waiter():
+                queued.set()
+                lk.acquire()
+                order.append("B")
+                lk.release()
+            t = threading.Thread(target=waiter)
+            t.start()
+            queued.wait(2)
+            time.sleep(0.02)  # B is now blocked inside acquire()
+            lk.release()
+            lk.acquire()      # immediate re-acquire by the releasing thread
+            order.append("A")
+            lk.release()
+            t.join(5)
+            bad += order != ["B", "A"]
+        return bad
+
+    def test_fairlock_hands_off_to_waiter_before_releaser_reacquires(self):
+        self.assertEqual(self.handoff_violations(FairLock), 0)
+
+    def test_handoff_scenario_discriminates_a_plain_rlock(self):
+        """Control: the same scenario FAILS with threading.RLock, so it can tell them apart."""
+        self.assertGreater(self.handoff_violations(threading.RLock), 0)
+
+    def test_writer_not_starved_by_tight_release_reacquire_hog(self):
+        """Hog loops release/acquire (2 ms of work per hold, no sleeps); four writers must
+        all make steady progress. Verified by patching threading.RLock in for FairLock: it
+        FAILS (max wait 1.64 s, run takes 9 s); with FairLock it passes in 0.3 s."""
+        lk, stop, waits = FairLock(), threading.Event(), []
+
+        def hog():
+            while not stop.is_set():
+                with lk:
+                    end = time.perf_counter() + 0.002  # a batch of work under the lock
+                    while time.perf_counter() < end:
+                        pass
+
+        def writer():
+            for _ in range(15):
+                t = time.perf_counter()
+                with lk:
+                    waits.append(time.perf_counter() - t)
+                time.sleep(0.01)
+
+        h = threading.Thread(target=hog)
+        ws = [threading.Thread(target=writer) for _ in range(4)]
+        h.start()
+        for w in ws:
+            w.start()
+        for w in ws:
+            w.join(15)
+        stop.set()
+        h.join(5)
+        self.assertEqual(len(waits), 60)
+        self.assertLess(max(waits), 0.25, "max wait %.3fs" % max(waits))
+
     def test_concurrent_writer_is_not_starved_by_sleep_cycle(self):
         for i in range(60):  # was 150 (~9 s); 60 episodes still span ~4 s of lock batches
             self.session("s%d" % i)

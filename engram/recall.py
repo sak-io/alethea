@@ -16,15 +16,18 @@ POOL = 20
 W_LEX, W_SEM, SEM_GAIN = 0.55, 0.45, 1.8
 HIT_BOOST, SPREAD_BOOST = 0.6, 0.35
 SPREAD_TOP, SPREAD_DAMP = 3, 0.5
-# Relevance floor for semantic-only hits (no lexical match). The hashed n-gram embedder has
-# no real semantics: on tests/data/recall_corpus.py unrelated text scores cosine 0.05-0.41
-# (short cues reach 0.33) while genuine sem-only matches (morphological variants, typos)
-# sit well above 0.5. A sem-only hit must reach SEM_MIN_COS; relevance is monotonic in
-# cosine (0.45 * min(1, cos * SEM_GAIN)), so the equivalent relevance floor is REL_MIN.
-# The initial guess (cos 0.10 / rel 0.05) still let nonsense through. Never applied to
-# lexical hits.
-SEM_MIN_COS = 0.45
-REL_MIN = W_SEM * min(1.0, SEM_MIN_COS * SEM_GAIN)
+# Relevance floors (tuned on tests/data/recall_corpus.py plus the off-topic negatives in
+# tests/test_recall_regression.py; tests/data/recall_heldout.py was never tuned against).
+# Measured: unrelated-pair cosines max 0.26 on the hashed n-gram embedder, related pairs
+# median 0.70 with ~7% below 0.30. So a hit counts as "semantic" at cosine >= SEM_MIN_COS.
+# FTS ranks are normalised (the top full-text hit always has lex 1.0 however weak), so a
+# lexical hit is judged on how much of the cue it covers instead: the matched fraction of
+# distinct non-stopword cue stems must reach LEX_MIN_COVER (all of them for cues of
+# <= LEX_ALL_UP_TO stems). A hit passes if EITHER test passes. encode's dedup path calls
+# candidates(relevance_floor=False) and sees every neighbour.
+SEM_MIN_COS = 0.30
+REL_MIN = W_SEM * min(1.0, SEM_MIN_COS * SEM_GAIN)  # equivalent relevance floor
+LEX_MIN_COVER, LEX_ALL_UP_TO = 0.3, 0
 # Same-repo soft boost: multiplies the score; activation/relevance still dominate.
 SCOPE_BOOST = 1.15
 SCOPES = ("all", "repo")
@@ -33,7 +36,8 @@ STOPWORDS = frozenset(
     "a an the and or but if of to in on at by for with from as is are was were be been "
     "am do does did have has had i me my we our you your it its this that these those "
     "what which who whom how when where why can could would should will shall may might "
-    "about into than then so not no".split())
+    "about into than then so not no he she him his her hers they them their there here "
+    "up out off over very just also long much many".split())
 
 # Literal alternatives with single-space separators: linear, no repetition.
 _IDENTITY_CUE = re.compile(
@@ -65,6 +69,25 @@ def _fts_query(cue):
         if len(out) >= MAX_QUERY_TOKENS:
             break
     return " OR ".join(out[:MAX_QUERY_TOKENS])
+
+
+def _cue_stems(cue):
+    return {vectorize.stem(t) for t in vectorize.tokenize(_cap(cue)) if t not in STOPWORDS}
+
+
+def _covers(m, stems):
+    """Does memory m contain enough of the cue's distinct stems (see LEX_MIN_COVER)?"""
+    if not stems:
+        return True
+    n = len(stems)
+    need = n if n <= LEX_ALL_UP_TO else math.ceil(n * LEX_MIN_COVER)
+    text = " ".join((m.get("content") or "", m.get("gist") or "", m.get("keywords") or ""))
+    have = {vectorize.stem(t) for t in vectorize.tokenize(text[:8192])}
+    got = len(stems & have)
+    if got < need:  # a stem of >= 5 chars also matches a longer word it prefixes (postgres/postgresql)
+        rest = [t for t in stems - have if len(t) >= 5]
+        got += sum(1 for t in rest if any(h.startswith(t) for h in have))
+    return got >= need
 
 
 def _sigmoid(x):
@@ -101,9 +124,20 @@ def candidates(cortex, cue, pool=POOL, embedder_id=vectorize.EMBEDDER_ID, releva
         "AND vector IS NOT NULL ORDER BY last_access DESC, rowid DESC LIMIT ?",
         (embedder_id, max(pool * 4, 600))).fetchall()
     qv = vectorize.embed(cue)
-    for r, s in zip(rows, vectorize.cosine_many(qv, [r["vector"] for r in rows])):
+    vecs = [r["vector"] for r in rows]
+    for r, s in zip(rows, vectorize.cosine_many(qv, vecs)):
         if s > 0:
             sem[r["id"]] = s
+    # Floor test uses the cue minus stopwords: "what is the ..." alone scores cosine ~0.3
+    # against unrelated text, which is function-word noise, not meaning.
+    sem_floor = {}
+    if relevance_floor:
+        core = " ".join(t for t in vectorize.tokenize(cue) if t not in STOPWORDS)
+        if core and core != " ".join(vectorize.tokenize(cue)):
+            sem_floor = {r["id"]: s for r, s in zip(rows, vectorize.cosine_many(
+                vectorize.embed(core), vecs))}
+        else:
+            sem_floor = sem
     now = cortex.clock()
     # score = rel * f with f in [0.55, 1], so score <= rel: visit ids by descending rel
     # and stop once rel is below the pool-th best score. Exact top-`pool`, but only the
@@ -112,14 +146,18 @@ def candidates(cortex, cue, pool=POOL, embedder_id=vectorize.EMBEDDER_ID, releva
             for mid in set(lex) | set(sem)}
     out = []
     floor = -1.0
+    stems = _cue_stems(cue) if relevance_floor else ()
     for mid in sorted(rels, key=lambda i: (-rels[i], i)):
         rel = rels[mid]
-        if relevance_floor and mid not in lex and sem.get(mid, 0.0) < SEM_MIN_COS:
+        sem_ok = (sem_floor.get(mid, 0.0) if relevance_floor else sem.get(mid, 0.0)) >= SEM_MIN_COS
+        if relevance_floor and not sem_ok and mid not in lex:
             continue
         if len(out) >= pool and rel < floor:
             break
         m = seen.get(mid) or cortex.get(mid)
         if m is None or m["status"] != "active":
+            continue
+        if relevance_floor and not sem_ok and not _covers(m, stems):
             continue
         act = cortex.activation(m, now)
         m.update(lex=lex.get(mid, 0.0), sem=sem.get(mid, 0.0), relevance=rel,

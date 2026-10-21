@@ -149,6 +149,27 @@ CUES = [
 
 NEGATIVE_CUES = ["zxqv flurb wibble", "qqqq xjzk plorf", "lorem ipsum dolor sit amet"]
 
+# Off-topic: unrelated domains, plus partial-overlap cues that share one common word with a
+# stored memory ("learn", "market", "release", "model"...). Nothing may be returned.
+OFFTOPIC_CUES = [
+    "what is the capital of australia",
+    "how do I bake sourdough bread at home",
+    "learn to cook pasta from scratch",
+    "best hiking trails near the mountains this summer",
+    "who won the football world cup in 2018",
+    "how many calories are in a banana",
+    "recommend a good science fiction novel to read",
+    "how do I train a puppy to sit",
+    "stock market outlook for next quarter",
+    "when does the next full moon occur",
+    "how to knit a wool scarf for winter",
+    "translate good morning into japanese",
+    "what should I pack for a week long beach holiday",
+    "how long should I boil an egg",
+    "learn guitar chords for beginners",
+    "plan a birthday party for my daughter",
+]
+
 # 'the auth bug': the cue names the bug; the fix and the decision share no words with it.
 AUTH_EXTRA = [
     ("e_auth_fix", "episodic", "Serialized refresh with a per-user mutex and a short lived idempotency key."),
