@@ -2,6 +2,8 @@
 
 A specification of Engram, written so the project can be built from this document. For the product rationale, see `product-concept.md`.
 
+Every `ENGRAM_*` and `MNEMO_*` environment variable is listed in one table in [configuration.md](configuration.md); where this document names one, that table is authoritative for its default and implementation status.
+
 The numbers below (thresholds, weights, decay rates) are the reference starting values. Verify and tune them with tests.
 
 ---
