@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS memories (
 );
 CREATE INDEX IF NOT EXISTS idx_mem_repo ON memories(repo_root);
 CREATE INDEX IF NOT EXISTS idx_mem_kind_status ON memories(kind, status);
+CREATE INDEX IF NOT EXISTS idx_mem_vec ON memories(embedder_id, status, last_access);
 CREATE TABLE IF NOT EXISTS edges (
   src TEXT NOT NULL, dst TEXT NOT NULL, kind TEXT NOT NULL,
   weight REAL NOT NULL, created_at REAL NOT NULL,
@@ -167,6 +168,19 @@ class Cortex:
         d = dict(r)
         d["meta"] = json.loads(d["meta"] or "{}")
         return d
+
+    def get_many(self, mids):
+        """{id: memory dict} for the ids that exist (one query per 500 ids)."""
+        mids = list(mids)
+        out = {}
+        for i in range(0, len(mids), 500):
+            part = mids[i:i + 500]
+            for r in self.db.execute("SELECT * FROM memories WHERE id IN (%s)"
+                                     % ",".join("?" * len(part)), part):
+                d = dict(r)
+                d["meta"] = json.loads(d["meta"] or "{}")
+                out[d["id"]] = d
+        return out
 
     def reinforce(self, mid, amount=1.0):
         """Bump strength and access_count together; refresh last_access."""

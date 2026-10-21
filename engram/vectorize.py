@@ -1,7 +1,9 @@
 """Embedding, stemming, cosine/jaccard. Stdlib only, no internal deps (T§4)."""
 import hashlib
 import math
+import operator
 import re
+from functools import lru_cache
 from array import array
 
 SALT = b"engram-v1"
@@ -24,6 +26,7 @@ _SUFFIXES = sorted(
     key=len, reverse=True)
 
 
+@lru_cache(maxsize=65536)
 def stem(word):
     """Plural first, then longest suffix. Stems keep >= 3 chars; short words untouched."""
     w = word.lower()
@@ -54,6 +57,7 @@ def stem_tokens(text):
     return [stem(t) for t in tokenize(text)]
 
 
+@lru_cache(maxsize=262144)
 def _bucket(feature):
     d = hashlib.blake2b(feature.encode("utf-8"), digest_size=8, salt=SALT).digest()
     n = int.from_bytes(d, "big")
@@ -92,20 +96,59 @@ def from_bytes(blob):
     return list(a)
 
 
+if hasattr(math, "sumprod"):  # C-speed dot product (Python 3.12+)
+    _dot = math.sumprod
+else:
+    def _dot(a, b):
+        return sum(map(operator.mul, a, b))
+
+
+@lru_cache(maxsize=1024)
+def _decode(blob):
+    """(floats, norm) for an immutable bytes blob; cached because dedup rescans the
+    same recent vectors on every write."""
+    a = array("f")
+    a.frombytes(blob)
+    v = a.tolist()
+    return v, math.sqrt(_dot(v, v))
+
+
 def cosine(a, b):
     """Cosine of two vectors (bytes or float sequences). Zero/mismatched -> 0.0."""
     if isinstance(a, (bytes, bytearray, memoryview)):
-        a = from_bytes(a)
+        a, na = _decode(a if type(a) is bytes else bytes(a))
+    else:
+        na = math.sqrt(_dot(a, a))
     if isinstance(b, (bytes, bytearray, memoryview)):
-        b = from_bytes(b)
+        b, nb = _decode(b if type(b) is bytes else bytes(b))
+    else:
+        nb = math.sqrt(_dot(b, b))
     if len(a) != len(b):
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
     if not na or not nb:
         return 0.0
-    return max(-1.0, min(1.0, dot / (na * nb)))
+    return max(-1.0, min(1.0, _dot(a, b) / (na * nb)))
+
+
+def cosine_many(query, blobs):
+    """[cosine(query, b) for b in blobs] with the query decoded once.
+
+    The query (a short cue) is sparse: only its non-zero coordinates are multiplied,
+    which gives the same dot product (zero terms contribute nothing) several times faster.
+    """
+    q, nq = _decode(query if type(query) is bytes else bytes(query))
+    idx = [i for i, x in enumerate(q) if x]
+    qv = [q[i] for i in idx]
+    pick = operator.itemgetter(*idx) if len(idx) > 1 else None
+    out = []
+    for b in blobs:
+        v, n = _decode(b if type(b) is bytes else bytes(b))
+        if len(v) != len(q) or not nq or not n or not idx:
+            out.append(0.0)
+            continue
+        dot = _dot(qv, pick(v)) if pick else q[idx[0]] * v[idx[0]]
+        out.append(max(-1.0, min(1.0, dot / (nq * n))))
+    return out
 
 
 def jaccard(a, b):
@@ -134,5 +177,10 @@ class HashedNgramEmbedder(Embedder):
         return to_bytes(embed_floats(text))
 
 
+@lru_cache(maxsize=4096)
+def _embed_cached(text):
+    return to_bytes(embed_floats(text))  # bytes are immutable: safe to share
+
+
 def embed(text):
-    return HashedNgramEmbedder().embed(text)
+    return _embed_cached(text)

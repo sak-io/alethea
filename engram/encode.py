@@ -130,13 +130,17 @@ def register_threshold(embedder, value):
     _THRESHOLDS[embedder] = float(value)
 
 
+def _raw_similarity(a, b):
+    return max(cosine(vectorize.embed(a), vectorize.embed(b)), jaccard(a, b))
+
+
 def similarity(a, b, embedder=None):
     """max(cosine, jaccard), damped x0.55 by identifier and negation/antonym vetoes.
 
     Vetoes apply under every embedder. Only the default hashed embedder is
     available until T25; `embedder` selects the threshold, not the vectors.
     """
-    s = max(cosine(vectorize.embed(a), vectorize.embed(b)), jaccard(a, b))
+    s = _raw_similarity(a, b)
     if s <= 0.0:
         return 0.0
     ident = _identifier_veto(a, b)
@@ -296,14 +300,23 @@ def _gist(text):
 def _best_duplicate(cortex, content, embedder_id):
     """(best_similarity, memory) over same-embedder recall candidates."""
     from engram import recall  # deferred: recall imports encode (ADR 0002)
-    best, best_m = 0.0, None
-    for m in recall.candidates(cortex, content, embedder_id=embedder_id):
+    best, best_m, best_i = 0.0, None, -1
+    pool = []
+    for i, m in enumerate(recall.candidates(cortex, content, embedder_id=embedder_id)):
         if m.get("embedder_id") != embedder_id:
             continue  # never compare across embedders
-        s = similarity(content[:markers.MAX_CHARS], (m["content"] or "")[:markers.MAX_CHARS],
-                       embedder=embedder_id)
-        if s > best:
-            best, best_m = s, m
+        a, b = content[:markers.MAX_CHARS], (m["content"] or "")[:markers.MAX_CHARS]
+        pool.append((-_raw_similarity(a, b), i, a, b, m))
+    # Vetoes only damp (x < 1), so similarity <= raw. Visit by descending raw and stop
+    # once raw < best: the result (best score and, on ties, the earliest candidate) is
+    # identical to scoring every candidate, but the veto work is skipped.
+    pool.sort(key=lambda t: (t[0], t[1]))
+    for nraw, i, a, b, m in pool:
+        if -nraw < best:
+            break
+        s = similarity(a, b, embedder=embedder_id)
+        if s > best or (s == best and best_m is not None and i < best_i):
+            best, best_m, best_i = s, m, i
     return best, best_m
 
 
