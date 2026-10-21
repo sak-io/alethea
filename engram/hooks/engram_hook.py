@@ -173,12 +173,34 @@ def on_stop(payload):
     return _observe(payload.get("last_assistant_message"), "assistant", payload)
 
 
+def _spawn_export(params):
+    """Refresh already-exported rule files in a detached child (the hook stays fast). Only
+    when the repo already has an Engram-owned export file: nothing is ever created here."""
+    try:
+        root = params.get("repo_root")
+        if not root:
+            return
+        from engram import export
+        if not any(export._exists(root, t) for t in export.TARGETS):
+            return
+        subprocess.Popen([sys.executable, "-m", "engram.export", params.get("cwd") or root],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True,
+                         cwd=_ROOT, env=dict(os.environ, PYTHONPATH=_ROOT,
+                                             PYTHONDONTWRITEBYTECODE="1"))
+        _note("export")
+    except Exception:
+        pass
+
+
 def on_session_end(payload):
     params = _scope(payload)
     if "session_id" not in params:
         return None
     if not _send_only("session_end", params):
         _note("offline")
+    else:
+        _spawn_export(params)
     return None
 
 

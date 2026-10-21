@@ -26,7 +26,7 @@ try:  # POSIX only
 except ImportError:
     fcntl = None
 
-from engram import __version__, consolidate, encode, gitctx, recall, vectorize
+from engram import __version__, consolidate, encode, export, gitctx, recall, vectorize
 from engram.config import MAX_REQUEST_BYTES, ensure_private_dir, home_dir, load_config
 from engram.cortex import Cortex
 from engram.fairlock import FairLock
@@ -46,7 +46,7 @@ SLEEP_BUDGET_S = 120.0
 UNIX_PATH_MAX = 104
 MIN_TOKEN_LEN = 16
 AUTH_TABLE_MAX = 1024
-UNSUPPORTED = ("export_rules", "reembed", "pending")
+UNSUPPORTED = ("reembed", "pending")
 _KINDS = ("episodic", "semantic", "procedural", "identity")
 _PUBLIC = ("id kind content gist keywords salience strength access_count created_at "
            "last_access status session_id cwd repo_root embedder_id meta").split()
@@ -213,7 +213,8 @@ class Engram:
             "remember": self.v_remember, "recall": self.v_recall, "observe": self.v_observe,
             "briefing": self.v_briefing, "reflect": self.v_reflect, "forget": self.v_forget,
             "sleep": self.v_sleep, "session_end": self.v_session_end,
-            "status": self.v_status, "dump": self.v_dump, "ping": self.v_ping}
+            "status": self.v_status, "dump": self.v_dump, "ping": self.v_ping,
+            "export_rules": self.v_export_rules}
 
     # dispatch
 
@@ -227,7 +228,7 @@ class Engram:
             fn = self.verbs.get(verb)
             if fn is None:
                 return _err("unknown verb")
-            if verb not in ("ping", "status"):
+            if verb not in ("ping", "status", "export_rules"):
                 self.last_activity = self.mono()
                 self._activity_since_sleep = True
             return fn(params)
@@ -306,6 +307,19 @@ class Engram:
         with self.lock:
             b = recall.briefing(self.cortex, repo_root=root, cwd=cwd)
         return {"ok": True, "text": b["text"], "count": len(b["items"])}
+
+    def v_export_rules(self, p):
+        """Render-only (R25): returns plain items for repo_root. It never accepts or uses a
+        path/target/directory and never writes a file; the client writes into its own repo."""
+        for k in export.FORBIDDEN_PARAMS:
+            if k in p:
+                raise BadRequest("parameter not accepted: %s" % k)
+        root = _str(p, "repo_root", True)
+        if not export.valid_repo_root(root):
+            raise BadRequest("repo_root must be an absolute path without '..'")
+        with self.lock:
+            items = export.select_items(self.cortex, root)
+        return {"ok": True, "items": items, "count": len(items)}
 
     def v_forget(self, p):
         mid = _str(p, "id", True, 128)
