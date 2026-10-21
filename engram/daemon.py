@@ -41,8 +41,6 @@ SLEEP_TICK_S = 1.0
 SLEEP_BUDGET_S = 120.0
 UNIX_PATH_MAX = 104
 MIN_TOKEN_LEN = 16
-AUTH_FREE_FAILS = 3
-AUTH_BACKOFF_MAX_S = 30.0
 AUTH_TABLE_MAX = 1024
 UNSUPPORTED = ("export_rules", "reembed", "pending")
 _KINDS = ("episodic", "semantic", "procedural", "identity")
@@ -72,31 +70,48 @@ def _truthy(v):
 
 
 class AuthLimiter:
-    """Per-peer failed-auth backoff: after AUTH_FREE_FAILS failures the peer is locked out
-    for 1, 2, 4 ... s (capped); while locked out the token is not even compared."""
+    """Failed-auth throttling that can never lock out a correct token.
 
-    def __init__(self, clock=time.monotonic):
-        self.clock = clock
+    A correct token is always served. Failures only (1) get a growing, capped delay on the
+    failing reply, by how many recent failures that peer IP had, and (2) draw from a global
+    token bucket; over the bucket the connection is dropped without a reply or any work."""
+
+    def __init__(self, clock=time.monotonic, delay_unit=0.05, delay_cap=2.0,
+                 rate=20.0, burst=20.0, forget_s=30.0):
+        self.clock, self.unit, self.cap = clock, delay_unit, delay_cap
+        self.rate, self.burst, self.forget_s = rate, burst, forget_s
         self._lock = threading.Lock()
-        self._state = {}  # peer -> [fails, blocked_until]
+        self._state = {}  # peer -> [recent_fails, last_fail_time]
+        self._tokens, self._t = burst, None
 
-    def blocked(self, peer):
-        with self._lock:
-            st = self._state.get(peer)
-            return bool(st) and self.clock() < st[1]
+    def delay_for(self, n):
+        return min(self.cap, self.unit * 2.0 ** (max(n, 1) - 1)) if n < 64 else self.cap
 
     def fail(self, peer):
+        """Record a failure. -> delay in seconds for the failing reply, or None = drop."""
+        now = self.clock()
         with self._lock:
-            if peer not in self._state and len(self._state) >= AUTH_TABLE_MAX:
-                self._state.pop(next(iter(self._state)))
-            st = self._state.setdefault(peer, [0, 0.0])
+            if self._t is not None:
+                self._tokens = min(self.burst, self._tokens + (now - self._t) * self.rate)
+            self._t = now
+            if self._tokens < 1.0:
+                return None
+            self._tokens -= 1.0
+            st = self._state.get(peer)
+            if st is None:
+                if len(self._state) >= AUTH_TABLE_MAX:
+                    self._state.pop(next(iter(self._state)))
+                st = self._state[peer] = [0, now]
+            elif now - st[1] > self.forget_s:
+                st[0] = 0
             st[0] += 1
-            if st[0] >= AUTH_FREE_FAILS:
-                st[1] = self.clock() + min(AUTH_BACKOFF_MAX_S, 2.0 ** (st[0] - AUTH_FREE_FAILS))
+            st[1] = now
+            return self.delay_for(st[0])
 
     def ok(self, peer):
         with self._lock:
             self._state.pop(peer, None)
+
 
 
 def _err(msg, **kw):
@@ -425,6 +440,7 @@ class ConnCtx:
         self.transport, self.peer, self.authenticated = transport, peer, authenticated
         self.token, self.limiter = token, limiter
         self.close = False  # set when the connection must be dropped after the reply
+        self.delay, self.drop = 0.0, False
 
 
 def _token_ok(expected, given):
@@ -436,22 +452,21 @@ def _token_ok(expected, given):
 
 
 def _authorize(ctx, request):
-    """None if allowed, else the error reply. Never echoes or logs the token."""
+    """None if allowed, else the error reply. Never echoes or logs the token. The
+    constant-time compare ALWAYS runs: a correct token is served whatever happened before."""
     if ctx.transport != "tcp" or ctx.token is None:
         return None
-    lim = ctx.limiter
-    if lim is not None and lim.blocked(ctx.peer):
-        ctx.close = True
-        return _err("rate limited")
     if _token_ok(ctx.token, request.get("token") if isinstance(request, dict) else None):
         ctx.authenticated = True
-        if lim is not None:
-            lim.ok(ctx.peer)
+        if ctx.limiter is not None:
+            ctx.limiter.ok(ctx.peer)
         return None
     ctx.authenticated = False
     ctx.close = True
-    if lim is not None:
-        lim.fail(ctx.peer)
+    if ctx.limiter is not None:
+        ctx.delay = ctx.limiter.fail(ctx.peer)
+        if ctx.delay is None:
+            ctx.drop = True  # over the global failure budget: no reply, no more work
     if (isinstance(request, dict) and request.get("verb") == "ping"
             and "token" not in request):
         return _err("unauthorized")
@@ -473,11 +488,12 @@ def handle_request(engram, ctx, request):
 
 class Server:
     def __init__(self, engram, home=None, read_timeout=None, max_conns=MAX_CONNECTIONS,
-                 max_request=MAX_REQUEST_BYTES, env=None, auth_clock=time.monotonic):
+                 max_request=MAX_REQUEST_BYTES, env=None, auth_clock=time.monotonic,
+                 auth_limits=None):
         self.engram = engram
         self.env = (engram.env if engram is not None else os.environ) if env is None else env
         self.home = ensure_private_dir(home) if home else engram.home
-        self.limiter = AuthLimiter(auth_clock)
+        self.limiter = AuthLimiter(auth_clock, **(auth_limits or {}))
         self.tcp_listener = None
         self.tcp_addr = None
         self.token = None
@@ -543,6 +559,8 @@ class Server:
             lf.close()
             return False
         self._lockf = lf
+        with contextlib.suppress(OSError):
+            os.chmod(self.home / "daemon.lock", 0o600)
         try:
             if not container:
                 r = self._bind_unix()
@@ -784,6 +802,10 @@ class Server:
                     resp = handle_request(self.engram, ctx, request)
                 finally:
                     self.slots.release()
+                if ctx.drop:
+                    return
+                if ctx.delay:
+                    self.stop.wait(ctx.delay)  # slows only this (failing) connection
                 if not self._send(conn, resp) or ctx.close:
                     return
         except Exception as e:

@@ -8,6 +8,7 @@ Discovery: Unix socket <home>/engram.sock, else TCP from ENGRAM_HOST/ENGRAM_PORT
 <home>/daemon.json ({"host","port"}). Token: ENGRAM_TOKEN env, else 0600 file <home>/token.
 """
 import fcntl
+import ipaddress
 import json
 import os
 import socket
@@ -23,7 +24,6 @@ MAX_RESPONSE_BYTES = 8 << 20
 MAX_REQUEST_BYTES = 1 << 20
 AUTOSTART_COOLDOWN_S = 10.0
 _warned_token = False
-_LOOPBACK = ("127.0.0.1", "localhost", "::1")
 
 
 def _offline():
@@ -79,11 +79,24 @@ def _tcp_target(env, home):
         return None
     if not 0 < port < 65536:
         return None
-    return (host or "127.0.0.1", port)
+    host = host or "127.0.0.1"
+    if host == "localhost":  # explicit mapping, never a lookup
+        host = "127.0.0.1"
+    return (host, port)
+
+
+def _is_loopback_literal(host):
+    """IP literals only (127.0.0.0/8, ::1); names are never resolved or trusted."""
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.version == 4 and ip in ipaddress.ip_network("127.0.0.0/8") or (
+        ip.version == 6 and ip == ipaddress.IPv6Address("::1"))
 
 
 def _token_allowed(host, env):
-    if host in _LOOPBACK:
+    if _is_loopback_literal(host):
         return True
     return str(_env(env).get("ENGRAM_ALLOW_REMOTE_TOKEN", "")).strip().lower() in ("1", "true", "yes")
 
