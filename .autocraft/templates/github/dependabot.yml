@@ -1,0 +1,31 @@
+version: 2
+updates:
+  # Keep CI actions current (they are a supply-chain risk too)
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+  # The ecosystem for your language is enabled automatically by `autocraft init --lang` / `autocraft github --lang`.
+  # - package-ecosystem: npm
+  #   directory: /
+  #   schedule: { interval: weekly }
+  # - package-ecosystem: pip
+  #   directory: /
+  #   schedule: { interval: weekly }
+  # - package-ecosystem: gomod
+  #   directory: /
+  #   schedule: { interval: weekly }
+  # - package-ecosystem: maven
+  #   directory: /
+  #   schedule: { interval: weekly }
+  # - package-ecosystem: nuget
+  #   directory: /
+  #   schedule: { interval: weekly }
+  # - package-ecosystem: cargo
+  #   directory: /
+  #   schedule: { interval: weekly }
+  # - package-ecosystem: pub
+  #   directory: /
+  #   schedule: { interval: weekly }
+  # - package-ecosystem: terraform
+  #   directory: /
+  #   schedule: { interval: weekly }

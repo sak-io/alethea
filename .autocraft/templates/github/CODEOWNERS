@@ -1,0 +1,4 @@
+# Replace @your-handle with the human owner. Used to route review requests.
+* @your-handle
+/.github/ @your-handle
+/docs/architecture/ @your-handle

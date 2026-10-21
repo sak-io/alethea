@@ -1,0 +1,17 @@
+# Your agent team's settings. Edit, then run:  python3 .autocraft/framework/bin/autocraft sync
+tools: [claude-code]       # claude-code | claude-app | cursor | copilot | gemini-cli | windsurf | cline | agents-md | prompts
+team: [starter]            # one or more of: starter, web-product, api-backend, mobile, ai-product, data-ml, platform, toolsmith, makers
+roles_add: []              # extra roles on top of the team(s), e.g. [qa-engineer, technical-writer]
+roles_remove: []           # roles to drop, e.g. [ux-designer]
+sources: []                # owner documents the team treats as authoritative, e.g. [docs/product-concept.md, docs/technical-plan.md]
+role_models: []            # Claude Code only, per role: [pr-reviewer=sonnet, qa-engineer=haiku]; default is to inherit the session model
+git_mode: session-branch   # session-branch (commit on the session branch, local worktrees, no extra remote branches/PRs) | pr-per-task
+archetypes: []             # what you are building (see .autocraft/archetypes/README.md), e.g. [fullstack-app, ai-assistant]
+capabilities: []           # (secrets-and-config, deployment-hosting, analytics-observability are always on and implied)  extras: extra needs: authentication | payments | database | email-and-notifications | file-uploads | search | privacy-compliance
+experience: beginner       # beginner | intermediate | expert  (how agents explain and decide)
+autonomy_level: 2          # 1 = approve every phase, 2 = approve architecture + merges, 3 = approve merges only
+max_review_rounds: 3       # review loops before escalating to a human
+max_parallel_developers: 3 # builder agents at once (independent tasks only)
+default_branch: main
+language: ""               # set when GitHub CI is installed (autocraft github --lang ...)
+human_owner: ""            # GitHub handle to notify when something is release-ready
