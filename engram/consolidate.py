@@ -53,6 +53,10 @@ def downscale(cortex, now=None, lock=None):
     """Returns dict(ran, periods, archived, deleted). No-op inside the 6 h gate.
 
     Missing/corrupt/future last_downscale: 0 elapsed time (no shrink), marker reset to now.
+
+    Crash semantics (deliberate): `last_downscale` is written BEFORE decay is applied, so a
+    crash mid-run loses that period's decay instead of applying it twice on restart. Decay is
+    a gentle, repeatable nudge; double-shrinking a memory is the worse failure.
     """
     now = float(cortex.clock() if now is None else now)
     out = {"ran": False, "periods": 0.0, "archived": 0, "deleted": 0}
