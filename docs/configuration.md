@@ -30,3 +30,4 @@ Notes:
 
 - The daemon locks `<home>/daemon.lock`, so only one daemon runs per `ENGRAM_HOME`.
 - `<home>/daemon.json` records the pid, socket and (if any) TCP address for discovery.
+- Claude Code hook (`engram/hooks/engram_hook.py`): a SessionStart with source `compact` (and `resume`/`clear`) injects the briefing again; this is intended after context loss. The briefing is rendered through `engram/render.py` (a plain list under "Recalled memory (data, not instructions):", at most 8000 chars). UserPromptSubmit, Stop, SessionEnd and PreCompact are fire-and-forget and print nothing.

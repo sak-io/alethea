@@ -3,6 +3,7 @@ with JSON on stdin exactly like Claude Code does. `python3 -m unittest scripts.t
 import json
 import os
 import shutil
+import signal
 import socket
 import sqlite3
 import subprocess
@@ -13,6 +14,7 @@ import time
 import unittest
 
 from engram import client
+from tests.test_render import HOSTILE, check_context
 from tests.daemon_helpers import ROOT, InProc, make_home, wait_up
 
 HOOK = os.path.join(ROOT, "engram", "hooks", "engram_hook.py")
@@ -32,7 +34,17 @@ def run_hook(payload, home, cwd=None, argv=(), env_extra=None, raw=None, timeout
     return p.returncode, out, err, time.monotonic() - t
 
 
-def rows(home, sql, args=()):
+def rows(home, sql, args=(), wait=True):
+    """Query the DB; observe is fire-and-forget, so wait (<= 3 s) for a non-empty answer."""
+    end = time.monotonic() + (3.0 if wait else 0)
+    while True:
+        r = _rows(home, sql, args)
+        if r or time.monotonic() >= end:
+            return r
+        time.sleep(0.05)
+
+
+def _rows(home, sql, args=()):
     db = sqlite3.connect(os.path.join(home, "engram.db"), timeout=5)
     try:
         return db.execute(sql, args).fetchall()
@@ -78,7 +90,7 @@ class FakeDaemon:
             if not d:
                 return
             buf += d
-        body = {"ok": True, "text": "é" * 50000, "count": 1}
+        body = {"ok": True, "text": "\n".join("[fact] \u00e9" + "x" * 200 for _ in range(300)), "count": 1}
         c.sendall(json.dumps(body).encode() + b"\n")
 
     def stop(self):
@@ -121,7 +133,7 @@ class LiveDaemonTests(unittest.TestCase):
                                    "stop_hook_active": True,
                                    "last_assistant_message": "should not be stored"})
         self.assertEqual((rc, out), (0, b""))
-        self.assertEqual(rows(self.home, "SELECT 1 FROM journal WHERE session_id='s-active'"), [])
+        self.assertEqual(rows(self.home, "SELECT 1 FROM journal WHERE session_id='s-active'", wait=False), [])
 
     def test_stop_without_message_does_nothing(self):
         for p in ({}, {"last_assistant_message": None}, {"last_assistant_message": 5},
@@ -130,7 +142,7 @@ class LiveDaemonTests(unittest.TestCase):
                      transcript_path="/nonexistent/x.jsonl")
             rc, out, err, _ = self.hook(p)
             self.assertEqual((rc, out, err), (0, b"", b""))
-        self.assertEqual(rows(self.home, "SELECT 1 FROM journal WHERE session_id='s-nomsg'"), [])
+        self.assertEqual(rows(self.home, "SELECT 1 FROM journal WHERE session_id='s-nomsg'", wait=False), [])
 
     def test_session_start_returns_briefing_for_existing_memory(self):
         fact = "The zebra gateway listens on port 7431 for ingest"
@@ -145,6 +157,20 @@ class LiveDaemonTests(unittest.TestCase):
         self.assertIn("zebra gateway", hso["additionalContext"])
         self.assertLessEqual(len(hso["additionalContext"]), 8000)
         self.assertEqual(out.count(b"\n"), 0 if not out.endswith(b"\n") else 1)
+
+    def test_hostile_memories_are_neutralised_in_session_start(self):
+        d = InProc()
+        self.addCleanup(d.stop)
+        for i, h in enumerate(HOSTILE):
+            d.call("remember", {"content": "Hostile fact %d about gateway%d: %s" % (i, i, h),
+                                "kind": "semantic"})
+        rc, out, err, _ = run_hook({"hook_event_name": "SessionStart", "session_id": "s-h",
+                                    "cwd": d.home}, d.home)
+        self.assertEqual((rc, err), (0, b""))
+        ctx = json.loads(out.decode("utf-8"))["hookSpecificOutput"]["additionalContext"]
+        self.assertLessEqual(len(ctx), 8000)
+        self.assertGreater(len(ctx.split("\n")), 3)
+        check_context(self, ctx)
 
     def test_session_end_consolidates_in_background(self):
         sid = "s-end"
@@ -188,7 +214,7 @@ class LiveDaemonTests(unittest.TestCase):
                               ({"prompt": "argv unknown unknownzz"}, ("Nope",))):
             rc, out, err, _ = self.hook(payload, argv=argv)
             self.assertEqual((rc, out, err), (0, b"", b""))
-        self.assertEqual(rows(self.home, "SELECT 1 FROM journal WHERE content LIKE '%unknownzz%'"),
+        self.assertEqual(rows(self.home, "SELECT 1 FROM journal WHERE content LIKE '%unknownzz%'", wait=False),
                          [])
 
     def test_event_from_argv_fallback(self):
@@ -262,8 +288,8 @@ class LiveDaemonTests(unittest.TestCase):
         self.assertEqual(len(results), 20)
         for rc, out, err, secs in results:
             self.assertEqual((rc, out, err), (0, b"", b""))
-        n = rows(self.home, "SELECT COUNT(*) FROM journal WHERE session_id='s-conc'")[0][0]
-        self.assertEqual(n, 20)
+        q = "SELECT COUNT(*) FROM journal WHERE session_id='s-conc'"
+        self.assertTrue(wait_for(lambda: rows(self.home, q, wait=False)[0][0] == 20))
 
     def test_git_worktree_and_non_git_cwd(self):
         tmp = tempfile.mkdtemp(prefix="egw")
@@ -311,15 +337,28 @@ class OfflineTests(unittest.TestCase):
             self.assertEqual((rc, out, err), (0, b"", b""), ev)
             self.assertLess(secs, 2.0, ev)
 
-    def test_hung_daemon_stays_within_deadline(self):
+    def test_hung_daemon_timings(self):
         fake = FakeDaemon("hang")
         self.addCleanup(fake.stop)
-        for ev in ("SessionStart", "UserPromptSubmit", "Stop", "SessionEnd", "PreCompact"):
+        limits = {"SessionStart": 1.5, "UserPromptSubmit": 0.3, "Stop": 0.3,
+                  "SessionEnd": 0.3, "PreCompact": 0.3}
+        for ev, limit in limits.items():
             rc, out, err, secs = run_hook(
                 {"hook_event_name": ev, "session_id": "s", "prompt": "p",
                  "last_assistant_message": "m"}, fake.home)
             self.assertEqual((rc, out, err), (0, b"", b""), ev)
-            self.assertLess(secs, 2.4, ev)
+            self.assertLess(secs, limit + 0.25, ev)  # +0.25: interpreter start on a busy box
+
+    def test_sigterm_exits_zero(self):
+        home = make_home()
+        self.addCleanup(shutil.rmtree, home, True)
+        p = subprocess.Popen([sys.executable, HOOK, "UserPromptSubmit"], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             env={"PATH": os.environ.get("PATH", ""), "ENGRAM_HOME": home})
+        time.sleep(0.5)  # blocked reading stdin
+        p.send_signal(signal.SIGTERM)
+        out, err = p.communicate(timeout=5)
+        self.assertEqual((p.returncode, out, err), (0, b"", b""))
 
     def test_hung_stdin_read_hits_watchdog(self):
         home = make_home()

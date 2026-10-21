@@ -13,7 +13,7 @@ or exactly one JSON object. stderr is silent unless ENGRAM_HOOK_DEBUG=1 (one lin
 """
 import json
 import os
-import socket
+import signal
 import subprocess
 import sys
 import threading
@@ -28,7 +28,8 @@ STDIN_CAP = 2 << 20
 BRIEFING_CAP = 8000
 MAX_CONTENT_CHARS = 200_000  # daemon.MAX_CONTENT_CHARS
 TURN_CAP_BYTES = 256 * 1024  # same as the daemon's per-turn default (encode.MAX_TURN_BYTES)
-OBSERVE_WAIT_S = 1.0
+BRIEFING_WAIT_S = 1.2  # worst case (hung daemon) stays <= 1.3 s
+BRIEFING_LINE_CHARS = 400
 SEND_TIMEOUT_S = 0.3
 _T0 = time.monotonic()
 _debug_notes = []
@@ -113,42 +114,8 @@ def _scope(payload):
 
 
 def _send_only(verb, params):
-    """Fire-and-forget: connect, send one line, close. True if the bytes were handed over."""
-    try:
-        from engram import client
-        if not client.SUPPORTED:
-            return False
-        env = os.environ
-        home = client._home(env)
-        req = dict(params)
-        req["verb"] = verb
-        tok = client._token(env, home)
-        for kind, addr in client._endpoints(env, home):
-            r = dict(req)
-            if tok:
-                if kind == "unix" or client._token_allowed(addr[0], env):
-                    r["token"] = tok
-                else:
-                    continue
-            payload = json.dumps(r, separators=(",", ":")).encode("utf-8") + b"\n"
-            fam = socket.AF_UNIX if kind == "unix" else (
-                socket.AF_INET6 if ":" in addr[0] else socket.AF_INET)
-            s = socket.socket(fam, socket.SOCK_STREAM)
-            try:
-                s.settimeout(SEND_TIMEOUT_S)
-                s.connect(addr)
-                s.sendall(payload)
-                return True
-            except OSError:
-                continue
-            finally:
-                try:
-                    s.close()
-                except OSError:
-                    pass
-        return False
-    except Exception:
-        return False
+    from engram import client
+    return client.send_nowait(verb, params, timeout=SEND_TIMEOUT_S)
 
 
 def _call(verb, params, timeout):
@@ -170,7 +137,7 @@ def _spawn_autostart():
 
 
 def on_session_start(payload):
-    r = _call("briefing", _scope(payload), DEADLINE_S - 0.3)
+    r = _call("briefing", _scope(payload), BRIEFING_WAIT_S)
     if r.get("offline"):
         _note("offline")
         _spawn_autostart()
@@ -178,8 +145,12 @@ def on_session_start(payload):
     text = r.get("text") if r.get("ok") else None
     if not isinstance(text, str) or not text.strip():
         return None
+    from engram import render  # memory is data: neutralise it before it reaches the model
+    ctx = render.render_list(text.splitlines(), BRIEFING_LINE_CHARS, BRIEFING_CAP)
+    if not ctx:
+        return None
     return json.dumps({"hookSpecificOutput": {
-        "hookEventName": "SessionStart", "additionalContext": text[:BRIEFING_CAP]}})
+        "hookEventName": "SessionStart", "additionalContext": ctx}})
 
 
 def _observe(text, role, payload):
@@ -187,8 +158,7 @@ def _observe(text, role, payload):
         return None
     params = _scope(payload)
     params.update(content=_cap_text(text), role=role)
-    r = _call("observe", params, OBSERVE_WAIT_S)
-    if r.get("offline"):
+    if not _send_only("observe", params):  # reply unused: do not make the user wait
         _note("offline")
     return None
 
@@ -233,6 +203,10 @@ def main():
     wd = threading.Timer(DEADLINE_S, _watchdog)
     wd.daemon = True
     wd.start()
+    try:
+        signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
+    except (ValueError, OSError, AttributeError):
+        pass
     out = None
     try:
         payload = _read_payload()

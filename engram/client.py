@@ -154,26 +154,34 @@ def _exchange(kind, addr, payload, deadline):
             pass
 
 
+def _requests(verb, params, env):
+    """Yield (kind, addr, payload) per endpoint. The ONLY place the token is attached: it goes
+    to the Unix socket or a loopback literal (or with ENGRAM_ALLOW_REMOTE_TOKEN), else the
+    endpoint is skipped. Oversize requests yield nothing."""
+    home = _home(env)
+    req = dict(params) if isinstance(params, dict) else {}
+    req["verb"] = str(verb)
+    tok = _token(env, home)
+    for kind, addr in _endpoints(env, home):
+        r = dict(req)
+        if tok:
+            if kind == "unix" or _token_allowed(addr[0], env):
+                r["token"] = tok
+            else:
+                continue
+        payload = json.dumps(r, separators=(",", ":")).encode("utf-8") + b"\n"
+        if len(payload) > MAX_REQUEST_BYTES:
+            return
+        yield kind, addr, payload
+
+
 def call(verb, params=None, timeout=TIMEOUT_HOOK, env=None):
     """Send one request; never raises; returns the daemon's dict or the offline dict."""
     try:
         if not SUPPORTED:
             return _offline()
         deadline = time.monotonic() + max(0.05, float(timeout))
-        home = _home(env)
-        req = dict(params) if isinstance(params, dict) else {}
-        req["verb"] = str(verb)
-        tok = _token(env, home)
-        for kind, addr in _endpoints(env, home):
-            r = dict(req)
-            if tok:
-                if kind == "unix" or _token_allowed(addr[0], env):
-                    r["token"] = tok
-                else:
-                    continue  # never send the token to a non-loopback host unless configured
-            payload = json.dumps(r, separators=(",", ":")).encode("utf-8") + b"\n"
-            if len(payload) > MAX_REQUEST_BYTES:
-                return _offline()
+        for kind, addr, payload in _requests(verb, params, env):
             try:
                 line = _exchange(kind, addr, payload, deadline)
                 resp = json.loads(line.decode("utf-8"))
@@ -188,6 +196,36 @@ def call(verb, params=None, timeout=TIMEOUT_HOOK, env=None):
         if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
         return _offline()
+
+
+def send_nowait(verb, params=None, env=None, timeout=0.3):
+    """Fire-and-forget: connect, send one request line, close without reading the reply.
+    True if the bytes were handed to an endpoint; False on any failure. Never raises. The
+    daemon still completes the request after we disconnect."""
+    try:
+        if not SUPPORTED:
+            return False
+        for kind, addr, payload in _requests(verb, params, env):
+            fam = socket.AF_UNIX if kind == "unix" else (
+                socket.AF_INET6 if ":" in addr[0] else socket.AF_INET)
+            s = socket.socket(fam, socket.SOCK_STREAM)
+            try:
+                s.settimeout(max(0.05, float(timeout)))
+                s.connect(addr)
+                s.sendall(payload)
+                return True
+            except Exception:
+                continue
+            finally:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+        return False
+    except BaseException as e:
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
+            raise
+        return False
 
 
 def hook_call(verb, params=None, env=None):
