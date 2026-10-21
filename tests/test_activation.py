@@ -76,6 +76,41 @@ class ActivationTest(unittest.TestCase):
             self.cx.activation("nope")
 
 
+class RobustTest(unittest.TestCase):
+    BAD = (float("nan"), float("inf"), float("-inf"), -5.0, None)
+
+    def test_bad_strength_age_finite(self):
+        for bad in self.BAD:
+            for args in ((bad, 0.5, 1, 1), (1.0, 0.5, bad, 1), (1.0, 0.5, 1, bad), (1.0, bad, 1, 1)):
+                for kind in c.KINDS:
+                    self.assertTrue(math.isfinite(c.base_activation(kind, *args)), (kind, args))
+
+    def test_corrupt_rows_finite(self):
+        tmp = tempfile.TemporaryDirectory()
+        clock = Clock()
+        cx = c.Cortex(Path(tmp.name) / "m.db", clock=clock)
+        try:
+            mid = cx.insert("episodic", "x")
+            for bad in self.BAD + (clock.t + 100 * DAY,):
+                for col in ("created_at", "last_access"):
+                    mem = cx.get(mid)
+                    mem[col] = bad
+                    self.assertTrue(math.isfinite(cx.activation(mem)), (col, bad))
+            self.assertTrue(math.isfinite(cx.activation(cx.get(mid), now=float("nan"))))
+        finally:
+            cx.close()
+            tmp.cleanup()
+
+    def test_recency_pinned(self):
+        base = c.base_activation("identity", 1.0, 0.5, 1, 1e9)
+        self.assertAlmostEqual(c.base_activation("identity", 1.0, 0.5, 1, 0) - base, 0.3)
+        self.assertAlmostEqual(c.base_activation("identity", 1.0, 0.5, 1, 7) - base, 0.3 / math.e)
+
+    def test_unknown_kind_raises(self):
+        with self.assertRaises(ValueError):
+            c.base_activation("bogus", 1, 0.5, 1)
+
+
 class CalibrationTest(unittest.TestCase):
     def days(self, kind, table, s=0.5):
         for day in range(1, 2000):

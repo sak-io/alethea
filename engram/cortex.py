@@ -28,16 +28,29 @@ RECENCY_WEIGHT = 0.3
 RECENCY_TAU_DAYS = 7.0
 
 
+def _finite(x, default):
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return default
+    return x if math.isfinite(x) else default
+
+
 def base_activation(kind, strength, salience, age_days, since_access_days=None):
-    """ADR 0003: B = ln(n_eff/(1-d)) - d*ln(age) + 1.6*(s-0.5) + recency; n_eff = strength."""
-    d = DECAY.get(kind, 0.5)
-    n = max(float(strength), MIN_STRENGTH)
-    age = max(float(age_days), MIN_AGE_DAYS)
+    """ADR 0003: B = ln(n_eff/(1-d)) - d*ln(age) + 1.6*(s-0.5) + recency; n_eff = strength.
+
+    Always finite: NaN/inf/negative inputs fall back to floors/defaults.
+    Recency term: RECENCY_WEIGHT * exp(-days_since_access / RECENCY_TAU_DAYS) = 0.3*exp(-days/7).
+    """
+    if kind not in DECAY:
+        raise ValueError("unknown kind: %r" % (kind,))
+    d = DECAY[kind]
+    n = max(_finite(strength, MIN_STRENGTH), MIN_STRENGTH)
+    age = max(_finite(age_days, MIN_AGE_DAYS), MIN_AGE_DAYS)
     b = math.log(n / (1.0 - d)) - (d * math.log(age) if d else 0.0)
-    b += 1.6 * (float(salience) - 0.5)
-    if since_access_days is None:
-        since_access_days = age
-    b += RECENCY_WEIGHT * math.exp(-max(float(since_access_days), 0.0) / RECENCY_TAU_DAYS)
+    b += 1.6 * (min(max(_finite(salience, 0.5), 0.0), 1.0) - 0.5)
+    since = max(_finite(since_access_days, age), 0.0)
+    b += RECENCY_WEIGHT * math.exp(-since / RECENCY_TAU_DAYS)
     return b
 
 _SCHEMA = """
@@ -169,9 +182,11 @@ class Cortex:
             mem = self.get(mem)
             if mem is None:
                 raise KeyError("no such memory")
-        now = self.clock() if now is None else now
-        age = max(now - mem["created_at"], 0.0) / DAY_S
-        since = max(now - (mem["last_access"] or mem["created_at"]), 0.0) / DAY_S
+        now = _finite(self.clock() if now is None else now, 0.0)
+        created = _finite(mem["created_at"], now)
+        last = _finite(mem["last_access"], created)
+        age = max(now - created, 0.0) / DAY_S
+        since = max(now - last, 0.0) / DAY_S
         return base_activation(mem["kind"], mem["strength"], mem["salience"], age, since)
 
     def set_status(self, mid, status):
