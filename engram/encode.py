@@ -1,10 +1,10 @@
-"""Encoding: similarity engine with vetoes (R9, R10, R11, T§5).
+"""Encoding: similarity engine with vetoes (R9-R11) and scoring (R12), T§5.
 
-Similarity section only; scoring and the encode() gate arrive in later tasks.
+The encode() gate arrives in a later task.
 """
 import re
 
-from engram import vectorize
+from engram import markers, vectorize
 from engram.vectorize import cosine, jaccard  # noqa: F401  (module-level so tests can stub)
 
 NEAR_DUPLICATE = 0.88
@@ -118,10 +118,67 @@ def is_near_duplicate(a, b, embedder=None):
     return similarity(a, b, embedder=embedder) >= threshold(embedder)
 
 
-def novelty(text, candidates, embedder=None):
-    """1 - best similarity against candidate texts (not rank-normalized score)."""
+def _nwords(text):
+    return len(re.findall(r"\S+", text or ""))
+
+
+def _length_adjust(score, text):
+    n = _nwords(text)
+    if n < markers.SHORT_WORDS:
+        return score * markers.SHORT_PENALTY
+    if n >= markers.LONG_WORDS:
+        return score + markers.LONG_BONUS
+    return score
+
+
+def amygdala(text):
+    """Affective salience in [0, 1]: summed marker weights, length-adjusted."""
+    if not text or not text.strip():
+        return 0.0
+    raw = sum(w for _, w, rx in markers.AMYGDALA if rx.search(text))
+    if raw <= 0.0:
+        return 0.0
+    return max(0.0, min(1.0, _length_adjust(raw, text)))
+
+
+def durability(text):
+    """Union of amygdala() with affect-free durable signals, in [0, 1]."""
+    if not text or not text.strip():
+        return 0.0
+    signals = [markers.IDENTITY, markers.DECISION, markers.QUANTITY, markers.CAUSAL, markers.RULE]
+    n = sum(1 for rx in signals if rx.search(text))
+    content = 0.0
+    if n:
+        content = _length_adjust(min(1.0, 0.45 + 0.1 * (n - 1)), text)
+    return max(0.0, min(1.0, max(amygdala(text), content)))
+
+
+def classify(text):
+    """Route to a kind: identity, procedural, semantic, else episodic."""
+    t = text or ""
+    if markers.CLASS_IDENTITY.search(t):
+        return "identity"
+    if markers.CLASS_PROCEDURAL.search(t):
+        return "procedural"
+    if markers.CLASS_SEMANTIC.search(t):
+        return "semantic"
+    return "episodic"
+
+
+def novelty(text, candidates=None, embedder=None):
+    """1 - best similarity against candidate texts (not rank-normalized score).
+
+    `candidates` is a callable returning candidate texts (injected in tests);
+    when None, recall.candidates is imported here (deferred, ADR 0002).
+    """
+    if candidates is None:
+        from engram import recall  # deferred: recall imports encode
+        candidates = recall.candidates
+    items = candidates(text) if callable(candidates) else candidates
     best = 0.0
-    for c in candidates or ():
+    for c in items or ():
+        if isinstance(c, dict):
+            c = c.get("text", "")
         best = max(best, similarity(text, c, embedder=embedder))
     return max(0.0, 1.0 - best)
 
