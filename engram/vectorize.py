@@ -131,15 +131,23 @@ def cosine(a, b):
 
 
 def cosine_many(query, blobs):
-    """[cosine(query, b) for b in blobs] with the query decoded once."""
+    """[cosine(query, b) for b in blobs] with the query decoded once.
+
+    The query (a short cue) is sparse: only its non-zero coordinates are multiplied,
+    which gives the same dot product (zero terms contribute nothing) several times faster.
+    """
     q, nq = _decode(query if type(query) is bytes else bytes(query))
+    idx = [i for i, x in enumerate(q) if x]
+    qv = [q[i] for i in idx]
+    pick = operator.itemgetter(*idx) if len(idx) > 1 else None
     out = []
     for b in blobs:
         v, n = _decode(b if type(b) is bytes else bytes(b))
-        if len(v) != len(q) or not nq or not n:
+        if len(v) != len(q) or not nq or not n or not idx:
             out.append(0.0)
-        else:
-            out.append(max(-1.0, min(1.0, _dot(q, v) / (nq * n))))
+            continue
+        dot = _dot(qv, pick(v)) if pick else q[idx[0]] * v[idx[0]]
+        out.append(max(-1.0, min(1.0, dot / (nq * n))))
     return out
 
 

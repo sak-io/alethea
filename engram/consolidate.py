@@ -8,6 +8,7 @@ import contextlib
 import itertools
 import json
 import math
+import time
 
 from engram import encode
 from engram.config import DOWNSCALE_INTERVAL_S
@@ -450,23 +451,27 @@ def _meta_del(cortex, *keys):
     cortex.db.commit()
 
 
-def consolidate_episodes(cortex, distiller=None, lock=None, limit=None):
+def consolidate_episodes(cortex, distiller=None, lock=None, limit=None, should_stop=None):
     """Distil pending journal episodes into an episodic summary + semantic facts.
 
     Everything goes through encode() (redaction, dedup vetoes, thresholds). Journal rows
     are marked consolidated only after the episode (or 100-turn chunk) is written; a
     failure leaves them pending for retry. Writes are checkpointed in engram_meta so a
     retry does not re-reinforce finished steps, and after MAX_ATTEMPTS failures the
-    episode is poisoned and skipped. Returns dict(episodes, skipped, summaries, facts,
-    errors, poisoned).
+    episode is poisoned and skipped. `should_stop()` is polled between episodes (batches);
+    when true the run ends cleanly with the rest still pending. Returns dict(episodes,
+    skipped, summaries, facts, errors, poisoned, stopped).
     """
     distiller = distiller or Distiller()
     out = {"episodes": 0, "skipped": 0, "summaries": 0, "facts": 0, "errors": 0,
-           "poisoned": 0}
+           "poisoned": 0, "stopped": False}
     with _lock(lock):
         episodes = replay(cortex, limit)
     for whole in episodes:
         for ep in _chunks(whole):
+            if should_stop is not None and should_stop():
+                out["stopped"] = True
+                return out
             ids = [r["id"] for r in ep["rows"]]
             turns = [r["content"] or "" for r in ep["rows"]]
             tag = str(ids[0])
@@ -544,3 +549,96 @@ def _write_episode(cortex, ep, ids, gist, out, key):
             cortex.link(r["id"], eid, "abstracts")
         prog["done"].append(i)
         cortex.meta_set(key, json.dumps(prog))
+
+
+# --- journal retention (G16) and the sleep cycle (R21, T§7) ------------------
+
+JOURNAL_CONSOLIDATED_DAYS = 30.0     # owner decision G16
+JOURNAL_UNCONSOLIDATED_DAYS = 90.0   # owner-approved addition
+PURGE_BATCH = 500
+
+
+def purge_journal(cortex, now=None, lock=None):
+    """Delete consolidated journal rows older than 30 d and unconsolidated older than 90 d.
+
+    Batched, lock per batch. Returns dict(consolidated, unconsolidated). Idempotent.
+    """
+    now = float(cortex.clock() if now is None else now)
+    out = {"consolidated": 0, "unconsolidated": 0}
+    for key, flag, days in (("consolidated", 1, JOURNAL_CONSOLIDATED_DAYS),
+                            ("unconsolidated", 0, JOURNAL_UNCONSOLIDATED_DAYS)):
+        cutoff = now - days * DAY_S
+        while True:
+            with _lock(lock):
+                ids = [r["id"] for r in cortex.db.execute(
+                    "SELECT id FROM journal WHERE consolidated=? AND created_at<? "
+                    "ORDER BY id LIMIT ?", (flag, cutoff, PURGE_BATCH))]
+                if not ids:
+                    break
+                cortex.db.execute("DELETE FROM journal WHERE id IN (%s)"
+                                  % ",".join("?" * len(ids)), ids)
+                cortex.db.commit()
+            out[key] += len(ids)
+    return out
+
+
+def sleep_cycle(cortex, deep=True, consolidate_only=False, now=None, distiller=None,
+                lock=None, budget_s=None, timer=time.monotonic):
+    """replay+gist -> downscale -> recombine, plus journal purge.
+
+    Triggers: timer = defaults; PreCompact = `deep=False` (skips downscale, recombine);
+    SessionEnd = `consolidate_only=True` (consolidate_episodes alone, no purge).
+    Each stage is isolated: an exception is recorded under result["errors"][stage] and
+    the remaining stages still run; nothing is raised. `lock` (a context manager) is
+    taken per batch inside the stages, never across a stage. `budget_s` is a wall-clock
+    budget on `timer`: consolidation stops between episodes and later stages are skipped
+    (result["stopped"]=True); unfinished journal rows stay pending (resumable).
+    Returns dict(ok, deep, consolidate_only, stopped, stages={name: counts + "ms"},
+    errors={name: "Type: msg"}, ms).
+    """
+    t0 = timer()
+    deadline = None if budget_s is None else t0 + float(budget_s)
+
+    def over():
+        return deadline is not None and timer() >= deadline
+
+    res = {"ok": True, "deep": bool(deep) and not consolidate_only,
+           "consolidate_only": bool(consolidate_only), "stopped": False,
+           "stages": {}, "errors": {}, "ms": 0.0}
+    try:
+        t_now = float(cortex.clock() if now is None else now)
+    except Exception:
+        t_now = None
+
+    plan = [("consolidate", lambda: consolidate_episodes(
+        cortex, distiller=distiller, lock=lock, should_stop=over))]
+    if not consolidate_only:
+        plan.append(("purge", lambda: purge_journal(cortex, t_now, lock=lock)))
+        if deep:
+            plan.append(("downscale", lambda: downscale(cortex, t_now, lock=lock)))
+            plan.append(("recombine", lambda: {"links": recombine(cortex, lock=lock)}))
+    for name, fn in plan:
+        if over() and name != "consolidate":
+            res["stopped"] = True
+            res["stages"][name] = {"skipped": "budget", "ms": 0.0}
+            continue
+        ts = timer()
+        try:
+            out = dict(fn())
+        except Exception as e:  # isolate: later stages still run
+            out = {}
+            res["errors"][name] = "%s: %s" % (type(e).__name__, e)
+            res["ok"] = False
+        if out.get("stopped"):
+            res["stopped"] = True
+        out["ms"] = round((timer() - ts) * 1000.0, 3)
+        res["stages"][name] = out
+    if t_now is not None and not consolidate_only:
+        try:
+            with _lock(lock):
+                cortex.meta_set("last_sleep", repr(t_now))
+        except Exception as e:
+            res["errors"]["last_sleep"] = "%s: %s" % (type(e).__name__, e)
+            res["ok"] = False
+    res["ms"] = round((timer() - t0) * 1000.0, 3)
+    return res
