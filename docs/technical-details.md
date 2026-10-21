@@ -8,7 +8,7 @@ The numbers below (thresholds, weights, decay rates) are the reference starting 
 
 ## 1. Constraints and stack
 
-- Pure Python 3 standard library. No pip installs, no network calls, no embedding API.
+- Pure Python 3 standard library by default. No pip installs, no network calls, no embedding API. Optional plugins (a learned `Embedder`, LLM-assisted consolidation) may add dependencies or network use, but only when explicitly enabled, and the core must work without them.
 - Storage: one SQLite file in WAL mode, with FTS5 for full-text search.
 - Single writer: one daemon process serializes all mutations behind a single `threading.RLock`.
 - Test runner: stdlib `unittest` (`python3 -m unittest discover`). `pytest` is not assumed.
@@ -21,7 +21,8 @@ engram/
   encode.py        salience scoring, novelty/dedup, classification, the encode() gate
   recall.py        retrieval: lexical+semantic fusion, spreading activation, briefing
   consolidate.py   sleep_cycle(): replay -> gist -> downscale -> recombine
-  vectorize.py     hashed n-gram embeddings, stemmer, cosine/jaccard
+  vectorize.py     Embedder protocol, hashed n-gram default, stemmer, cosine/jaccard
+  gitctx.py        repo_root / repo_common_dir resolution (git rev-parse, fail-soft)
   daemon.py        always-on process: socket server, verb dispatch, sleep timer
   client.py        thin fail-soft client used by hooks, MCP server, and mnemo
   mcp_server.py    stdio JSON-RPC MCP server: recall/remember/reflect/forget/engram_status
@@ -50,7 +51,9 @@ Each kind has its own decay exponent (`DECAY` dict):
 
 ### Schema
 
-- `memories`: id, kind, content, gist, keywords, salience, strength, access_count, created_at, last_access, status (`active` / `archived` / `suppressed`), session_id, cwd, vector (BLOB, 512-dim float32), meta (JSON).
+- `memories`: id, kind, content, gist, keywords, salience, strength, access_count, created_at, last_access, status (`active` / `archived` / `suppressed`), session_id, cwd, repo_root, vector (BLOB, float32), embedder_id, meta (JSON).
+- `repo_root` is nullable (non-git directories) and indexed. See "Repository context" below.
+- `embedder_id` (for example `hashed-ngram-v1:512`) records which embedder produced each vector, so vectors from different embedders are never compared.
 - `mem_fts`: FTS5 virtual table (porter + unicode61 tokenizer) over content/gist/keywords, kept in sync by `AFTER INSERT/UPDATE/DELETE` triggers.
 - `edges`: directed association graph `(src, dst, kind, weight, created_at)`. On a repeated link, upsert with `weight = MIN(1.0, weight + 0.15)` (Hebbian strengthening). Edge kinds include `abstracts` and `recombined`.
 - `journal`: raw hippocampal buffer. Every observed turn is stored, with a `consolidated` flag that consolidation clears.
@@ -66,9 +69,19 @@ B = ln(n / (1 - d)) - d * ln(age)
 
 `n` is the access count and `age` is time since creation. The result is biased additively by salience (`+1.6 * (salience - 0.5)`) and a small recency term. This one function makes "reinforced last week" outrank "a slightly better textual match untouched for months."
 
+### Repository context (`gitctx.py`)
+
+`cwd` alone is fragile: repos move, are reached through symlinks, and have worktrees and subdirectories. Each memory is also tagged with `repo_root`.
+
+- Resolve with `git -C <cwd> rev-parse --show-toplevel` on `os.path.realpath(cwd)`, so symlinked paths collapse to one root.
+- For worktrees, `--show-toplevel` differs per worktree. Also resolve `git rev-parse --git-common-dir` (the shared `.git`) and use its parent as the canonical repo identity, so every worktree of one repo shares memories. Store the canonical value in `repo_root`; keep the literal path in `cwd`.
+- Resolve in the hook process (which sees the real filesystem), not the daemon, which may run in a container. Pass `repo_root` as a verb argument. Cache per `cwd` for the process lifetime.
+- Fail-soft: a missing `git` binary, a non-repo directory, a timeout (short, for example 1 s), or any error yields `repo_root = NULL`. This never blocks the session.
+- Branch is deliberately not part of the key: decisions usually span branches. It may be stored in `meta` for display.
+
 ## 4. Embeddings (`vectorize.py`)
 
-There is no real embedding model. Instead, a 512-dim sparse-projected vector is built from:
+The default embedder is not a learned model. Instead, a 512-dim sparse-projected vector is built from:
 
 - stemmed-word unigrams (weight 1.0),
 - word bigrams (weight 0.5),
@@ -81,7 +94,24 @@ Details that matter:
 - `stem()` is a hand-rolled suffix stripper (plural first, then longest suffix first), built to agree with FTS5's porter stemmer.
 - Also provides `cosine` and `jaccard`.
 
-Related text scores about 0.3–0.45 cosine versus about 0 for unrelated text. That is enough for ranking, but it cannot see synonymy or negation. `vectorize.embed()` is the only function that must change to swap in a real model. Define it behind an `Embedder` protocol with the hashed n-gram embedder as the default.
+Related text scores about 0.3–0.45 cosine versus about 0 for unrelated text. That is enough for ranking, but it cannot see synonymy ("database wiped" vs "postgres reset") or negation ("disable auth" vs "enable auth").
+
+### `Embedder` protocol (first-class plugin)
+
+```python
+class Embedder(Protocol):
+    id: str            # stable, versioned, e.g. "hashed-ngram-v1:512"
+    dim: int
+    def embed(self, text: str) -> bytes | Sequence[float]: ...
+```
+
+- `HashedNgramEmbedder` is the default and the reference implementation.
+- Optional embedders (local ONNX/fastembed such as `all-MiniLM-L6-v2`, or a remote API) are selected by config (`ENGRAM_EMBEDDER`, env or config file) and loaded lazily, so the stdlib-only path never imports them.
+- Fail-soft: if the selected embedder is unavailable or raises (missing package, model not downloaded, network error), fall back to the hashed embedder for that call and log once. Lexical search keeps working regardless.
+- All vector consumers (`recall.candidates`, `novelty`, `similarity`, `recombine`) go through the protocol. Only compare vectors with matching `embedder_id`.
+- Changing embedder: new writes use the new one. Provide `mnemo reembed` to rewrite stored vectors in batches (resumable); until it completes, rows with a different `embedder_id` are served by the lexical channel only.
+- Thresholds are per-embedder. `NEAR_DUPLICATE`, the semantic scale factor (`sem * 1.8`), and the recombine band are calibrated for hashed n-grams. Dense models have a different cosine distribution (unrelated text is often 0.2–0.4, near-paraphrases 0.8+), so each embedder declares its own thresholds, defaulting to the conservative hashed values until tuned.
+- **Dedup safety must hold under every embedder.** Dense models also embed "enable X" and "disable X" very close together. The `max(cosine, jaccard)` rule and the identifier veto stay in force. Add a negation/antonym veto (differing tokens that include a negator or an opposing verb pair such as enable/disable, allow/deny, add/remove) that damps similarity just like the identifier veto. The adversarial dedup suite must run against each shipped embedder.
 
 ## 5. Encoding (`encode.py`)
 
@@ -171,14 +201,22 @@ Other behavior:
 
 - **Identity special case.** Questions like "who am I talking to?" are pure stopwords with almost no lexical or vector signal. When the cue matches `_IDENTITY_CUE`, pull the top identity rows directly.
 - **Reinforcement.** Every returned result is reinforced (testing effect): +0.6 strength for direct hits, +0.35 for associative spreads.
-- **`briefing()`**, used at `SessionStart`, returns identity memories first, then the highest-activation semantic and procedural memories, then a few recent episodic memories scoped to the session's `cwd`.
+- **`briefing()`**, used at `SessionStart`, returns identity memories first, then the highest-activation semantic and procedural memories, then a few recent episodic memories scoped to the session's repository. Scope by `repo_root` when set, otherwise fall back to exact `cwd`. Repo-scoped memories get a small activation boost over unscoped ones, but nothing is excluded outright, so cross-repo facts still surface.
 
 ## 7. Consolidation (`consolidate.py`)
 
 `sleep_cycle()` runs four stages.
 
 1. **`replay()`.** Group pending journal rows by session. Split into episodes wherever there is a gap over 15 minutes (`EPISODE_GAP`).
-2. **`extract_gist()` / `consolidate_episodes()`.** Extractive distillation with no model in the loop. Rank sentences by `durability()`, drop near-identical candidates (jaccard > 0.6), and keep the top 6. Write one episodic summary memory plus zero or more semantic facts, each linked back to its episode with an `abstracts` edge. Skip episodes shorter than 4 turns that are also low-salience.
+2. **`extract_gist()` / `consolidate_episodes()`.** Extractive distillation with no model in the loop (the default). Rank sentences by `durability()`, drop near-identical candidates (jaccard > 0.6), and keep the top 6. Write one episodic summary memory plus zero or more semantic facts, each linked back to its episode with an `abstracts` edge. Skip episodes shorter than 4 turns that are also low-salience.
+
+   Pre-filter before ranking so the extractive pass is less fragile on coding transcripts: strip or collapse fenced code blocks, diffs, stack traces, and long terminal output (keep at most the final error line and the command that produced it), and split sentences on newlines and bullet markers as well as punctuation.
+
+   **Optional LLM-assisted pass** (off by default, `ENGRAM_LLM_CONSOLIDATE`). A `Distiller` protocol with the extractive implementation as default and fallback. An LLM distiller takes the episode and returns structured bullets (decision, cause, procedure, open issue), each typed so it can be classified into a kind. Two delivery modes:
+   - *Host-agent callback:* the daemon never calls a model itself. It queues episodes as pending-consolidation items. The next session's MCP server exposes them (an `engram_consolidate_pending` tool, or MCP sampling where the host supports it), and the host agent returns the synthesized bullets via `remember`. This keeps the daemon offline and key-free.
+   - *Direct API:* a configured provider endpoint, run only during idle sleep.
+
+   Rules: the pass is best-effort and rate-limited. Any failure, timeout, or malformed output leaves the episode on the extractive path and is never an error to the session. LLM output is untrusted text: it goes through the normal `encode()` gate (novelty, dedup with the vetoes, thresholds), is capped in length, and is never executed or used to modify configuration. Episodes are marked `consolidated` only after a distiller succeeds, so they can be retried.
 3. **`downscale()`.** Synaptic homeostasis.
    - Multiply all non-identity strength by `0.93 ^ periods`, where periods scale with wall-clock time elapsed (capped at 14 days' worth per call).
    - Archive anything whose activation falls below `ARCHIVE_ACTIVATION = -3.2`.
@@ -253,6 +291,10 @@ Write the adversarial dedup tests **before** trusting any similarity-combination
 - **Downscale gate:** a second call inside 6 hours is a no-op. A future or corrupted `last_downscale` clamps to 0 elapsed time.
 - **End-to-end:** remember, recall, observe, sleep, and the briefing path.
 - **Hooks:** each wired event behaves correctly and tolerates an offline memory service.
+- **Embedder plugin:** the adversarial dedup suite passes for every shipped embedder; a missing or failing optional embedder falls back to hashed n-grams without raising; mixed `embedder_id` rows are never compared.
+- **Antonym/negation pairs:** "enable auth" vs "disable auth" and similar must not merge under any embedder.
+- **Distiller:** a failing or malformed LLM response leaves the episode unconsolidated and falls back to extraction; code/trace pre-filtering yields coherent gists on fixture transcripts.
+- **Repo context:** the same repo reached via a subdirectory, a symlink, and a second worktree resolves to one `repo_root`; non-git directories and a missing `git` binary yield `NULL` without error; briefing falls back to `cwd` when `repo_root` is `NULL`.
 
 ## 11. Review priorities
 
@@ -264,5 +306,6 @@ Write the adversarial dedup tests **before** trusting any similarity-combination
 
 ## 12. Extensions
 
-- Make the embedding function pluggable through an `Embedder` protocol. Add a remote-API embedder as a seam, keeping hashed n-grams as the default. Dedup safety must hold under either embedder.
+- Ship the `Embedder` protocol (section 4) with a local-model embedder (ONNX/fastembed, `all-MiniLM-L6-v2`) and a remote-API embedder as optional extras, keeping hashed n-grams as the default. Dedup safety must hold under every embedder.
+- Ship the optional LLM `Distiller` (section 7), starting with the host-agent callback mode.
 - Add a single-command installer to reduce setup friction.

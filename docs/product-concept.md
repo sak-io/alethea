@@ -42,7 +42,7 @@ Human memory is useful *because* it is lossy in a structured way. It privileges 
 - **Involuntary**: hooks capture every turn automatically. High-salience material is promoted to long-term memory immediately. The rest waits for consolidation.
 - **Voluntary**: the agent or user deliberately calls remember, recall, reflect, or forget. This produces better abstractions than automatic consolidation can.
 
-**Waking up informed.** At the start of a session, the agent receives a briefing: who the user is first, then the strongest decisions and procedures, then a few recent episodes from the current working directory.
+**Waking up informed.** At the start of a session, the agent receives a briefing: who the user is first, then the strongest decisions and procedures, then a few recent episodes from the current repository (falling back to the working directory outside git). Memories are scoped by repository root, so they follow an engineer across subdirectories, worktrees, and symlinked paths.
 
 **Sleeping.** When idle, or at session boundaries, Engram consolidates. It groups raw turns into episodes, distills them into summaries and facts, weakens everything slightly, archives what has faded, and links related memories it had not connected before.
 
@@ -52,7 +52,7 @@ Human memory is useful *because* it is lossy in a structured way. It privileges 
 
 1. **A broken memory must never break the session.** If the memory service is down, slow, or failing, the agent continues as if nothing happened.
 2. **Prefer redundancy to false merges.** A redundant memory is untidy and self-corrects under reinforcement. A false merge of two distinct facts is silent and permanent. Duplicate detection is biased hard toward "these are different".
-3. **Zero dependencies, fully offline.** Pure Python 3 standard library, with SQLite as storage. No pip installs, no network calls, no embedding API, no cost.
+3. **Zero dependencies, fully offline by default.** Pure Python 3 standard library, with SQLite as storage. No pip installs, no network calls, no embedding API, no cost. Learned embedders and LLM-assisted consolidation are opt-in plugins; the default install never needs them, and the system degrades to the default behavior if they fail.
 4. **Lossy by design.** Forgetting is a feature. Nothing is kept merely because it was said.
 
 ## 6. Differentiation
@@ -63,7 +63,8 @@ Human memory is useful *because* it is lossy in a structured way. It privileges 
 
 ## 7. Known limitations
 
-- Semantic matching uses hashed n-gram vectors, not a learned embedding model. It cannot see synonymy ("wiped" vs "reset") or negation. This is the highest-leverage upgrade path, and only the embedding function needs to change.
+- Semantic matching uses hashed n-gram vectors by default, not a learned embedding model. It cannot see synonymy ("database wiped" vs "postgres reset") or negation ("enable auth" vs "disable auth"). This is the highest-leverage upgrade path. The `Embedder` is a first-class plugin: users can opt into a local model (for example ONNX or fastembed with `all-MiniLM-L6-v2`) or a remote API. Learned embeddings are not a free fix for negation either, so the duplicate-safety rule holds under every embedder.
+- Consolidation distills by extraction only (no LLM). On noisy coding sessions (stack traces, diffs, terminal output), sentence-ranking heuristics can produce disjointed snippets. An optional, off-by-default LLM-assisted consolidation pass can synthesize structured bullets instead. Extraction remains the default and the fallback.
 - Setup involves a daemon, a socket, and hook wiring. That is likely too much friction for a five-minute trial.
 
 ## 8. Direction
@@ -76,7 +77,7 @@ The decision is to pursue Engram as an **open-source project**, not a funded com
 - Funded products such as Mem0 and Zep solve an adjacent problem and could add engineering-specific tuning quickly.
 - Open source de-risks adoption: no go-to-market motion is needed to get real signal. The technical rigor (the duplicate-safety rule, the four-store decay model, a distinct consolidation cycle) earns credibility with an open-source and MCP-tooling audience.
 
-**Scope:** a single-user design (daemon plus MCP server plus the core encode/recall/consolidate model). A pluggable `Embedder` seam lets users plug in a real embedding model. Multi-tenancy, audit logging, and tenant policy are out of scope, as they are the wrong shape for a solo open-source user.
+**Scope:** a single-user design (daemon plus MCP server plus the core encode/recall/consolidate model). A pluggable `Embedder` seam (default `HashedNgramEmbedder`, with local-model and remote-API options) lets users plug in a real embedding model, and an optional LLM consolidation pass can be enabled for higher-quality gists. Multi-tenancy, audit logging, and tenant policy are out of scope, as they are the wrong shape for a solo open-source user.
 
 **Open questions:**
 - License: MIT vs Apache-2.0 (leaning Apache-2.0, undecided).
