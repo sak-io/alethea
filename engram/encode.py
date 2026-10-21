@@ -1,13 +1,24 @@
-"""Encoding: similarity engine with vetoes (R9-R11) and scoring (R12), T§5.
-
-The encode() gate arrives in a later task.
+"""Encoding: similarity engine with vetoes (R9-R11), scoring (R12), the encode()
+gate and observe() (R13, R14), T§5. Every ingestion point redacts first (G16).
 """
+import os
 import re
 
 from engram import markers, vectorize
+from engram.redact import redact
 from engram.vectorize import cosine, jaccard  # noqa: F401  (module-level so tests can stub)
 
 NEAR_DUPLICATE = 0.88
+ENCODE_THRESHOLD = 0.34
+OBSERVE_DURABILITY = 0.45
+REINFORCE_STEP = 0.5
+IDENTITY_FLOOR = 0.62
+DELIBERATE_FLOOR = 0.55
+GIST_CHARS = 200
+# Per-turn input cap in bytes (env ENGRAM_MAX_TURN_BYTES), applied before redact/journal.
+MAX_TURN_BYTES = 256 * 1024
+TRUNCATION_MARKER = "\n[TRUNCATED]"
+MAX_KEYWORDS = 12
 VETO_FACTOR = 0.55
 
 # Per-embedder thresholds; dense embedders (T25) register theirs here.
@@ -54,11 +65,22 @@ def _words(text):
     return set(re.findall(r"[a-z0-9]+", (text or "").lower().replace("'", "").replace("’", "")))
 
 
+def _identifier_shaped(tok):
+    """digits, path separators, camel/Pascal, snake_case, kebab/dotted names, ALL_CAPS."""
+    return (any(c.isdigit() for c in tok) or "/" in tok or "\\" in tok
+            or "_" in tok or "-" in tok or "." in tok
+            or bool(_CAMEL.search(tok)) or (len(tok) > 1 and tok.isupper()))
+
+
 def _identifier_veto(a, b):
     ta, tb = _raw_tokens(a), _raw_tokens(b)
+    for k in set(ta) & set(tb):  # case-only / inserted-capital differences
+        x, y = ta[k], tb[k]
+        if x != y and (_CAMEL.search(x) or _CAMEL.search(y) or "_" in x or "_" in y):
+            return True
     for k in set(ta) ^ set(tb):
         tok = ta.get(k) or tb.get(k)
-        if any(c.isdigit() for c in tok) or "/" in tok or "\\" in tok or _CAMEL.search(tok):
+        if _identifier_shaped(tok):
             return True
     return False
 
@@ -80,6 +102,20 @@ def _substitution_veto(a, b):
     restatement, so damp it (false negatives are safe)."""
     wa, wb = set(vectorize.stem_tokens(a)), set(vectorize.stem_tokens(b))
     return bool(wa - wb) and bool(wb - wa)
+
+
+def _order_veto(a, b):
+    """Same bag of stemmed tokens (>= 0.95 multiset overlap) in a different order:
+    role swaps ("Alice reports to Bob" / "Bob reports to Alice") that no set-based
+    signal can see. A pure reordering restatement therefore does not merge (ADR 0007)."""
+    sa, sb = vectorize.stem_tokens(a), vectorize.stem_tokens(b)
+    if sa == sb or not sa or not sb:
+        return False
+    from collections import Counter
+    ca, cb = Counter(sa), Counter(sb)
+    inter = sum((ca & cb).values())
+    union = sum((ca | cb).values())
+    return union > 0 and inter / union >= 0.95
 
 
 def threshold(embedder=None):
@@ -109,7 +145,7 @@ def similarity(a, b, embedder=None):
     neg = _negation_veto(a, b)
     if neg:
         s *= VETO_FACTOR
-    if not neg and not ident and _substitution_veto(a, b):
+    if not neg and not ident and (_substitution_veto(a, b) or _order_veto(a, b)):
         s *= VETO_FACTOR
     return s
 
@@ -195,3 +231,161 @@ def compare_vectors(a, b):
     if a[0] != b[0]:
         return None
     return vectorize.cosine(a[1], b[1])
+
+
+# --- the encode() gate (R13) -------------------------------------------------
+
+_TRIVIAL = re.compile(
+    r"^\s*(?:ok(?:ay)?|k|kk|thanks?|thank\s+you|thx|ty|lol|lgtm|yes|yeah|yep|yup|no|nope|nah|"
+    r"sure|cool|nice|great|good|fine|hi|hello|hey|bye|got\s+it|sounds\s+good|go\s+ahead|"
+    r"continue|done|hmm+|ah+|oh+|wow|haha+|:\)|👍)[\s.!?,]*$", re.IGNORECASE)
+
+
+def max_turn_bytes():
+    try:
+        return max(1024, int(os.environ.get("ENGRAM_MAX_TURN_BYTES", MAX_TURN_BYTES)))
+    except ValueError:
+        return MAX_TURN_BYTES
+
+
+def _clean(content):
+    """Cap size first (cost bound), then redact; truncation is marked."""
+    if not isinstance(content, str):
+        return ""
+    cap = max_turn_bytes()
+    cut = len(content) > cap  # cheap pre-cut by chars before encoding
+    if cut:
+        content = content[:cap]
+    raw = content.encode("utf-8", errors="replace")
+    if len(raw) > cap:
+        content = raw[:cap].decode("utf-8", errors="ignore")
+        cut = True
+    if cut:
+        content += TRUNCATION_MARKER
+    return redact(content)
+
+
+def _r(v):
+    return redact(v) if isinstance(v, str) else v
+
+
+def _redact_meta(v):
+    if isinstance(v, str):
+        return redact(v)
+    if isinstance(v, dict):
+        return {k: _redact_meta(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_redact_meta(x) for x in v]
+    return v
+
+
+def _keywords(text):
+    seen, out = [], set()
+    for t in vectorize.tokenize(text):
+        if len(t) > 2 and t not in out:
+            out.add(t)
+            seen.append(t)
+    return " ".join(seen[:MAX_KEYWORDS])
+
+
+def _gist(text):
+    g = " ".join(text.split())
+    return g if len(g) <= GIST_CHARS else g[:GIST_CHARS].rstrip() + "..."
+
+
+def _best_duplicate(cortex, content, embedder_id):
+    """(best_similarity, memory) over same-embedder recall candidates."""
+    from engram import recall  # deferred: recall imports encode (ADR 0002)
+    best, best_m = 0.0, None
+    for m in recall.candidates(cortex, content, embedder_id=embedder_id):
+        if m.get("embedder_id") != embedder_id:
+            continue  # never compare across embedders
+        s = similarity(content[:markers.MAX_CHARS], (m["content"] or "")[:markers.MAX_CHARS],
+                       embedder=embedder_id)
+        if s > best:
+            best, best_m = s, m
+    return best, best_m
+
+
+def encode(cortex, content, kind=None, salience=None, force=False, deliberate=False,
+           session_id=None, cwd=None, repo_root=None, meta=None,
+           embedder_id=vectorize.EMBEDDER_ID):
+    """The encode gate. Returns {"status": "created"|"reinforced"|"rejected", ...}.
+
+    Content, gist, keywords and meta are redacted before anything is stored.
+    """
+    content = _clean(content)
+    if not content.strip():
+        return {"status": "rejected", "reason": "empty"}
+    if _TRIVIAL.match(content) and not (force or deliberate):
+        return {"status": "rejected", "reason": "trivial"}
+    best, dup = _best_duplicate(cortex, content, embedder_id)
+    if dup is not None and best >= threshold(embedder_id):
+        cortex.reinforce(dup["id"], REINFORCE_STEP)
+        return {"status": "reinforced", "id": dup["id"], "similarity": best}
+    surprise = max(0.0, min(1.0, 1.0 - best))
+    explicit = salience is not None
+    affect = max(0.0, min(1.0, float(salience))) if explicit else amygdala(content)
+    effective = affect * (0.45 + 0.55 * surprise)
+    if explicit:
+        effective = max(effective, affect * 0.9)
+    kind = kind or classify(content)
+    if kind == "identity":
+        effective = max(effective, IDENTITY_FLOOR)
+    if deliberate:
+        effective = max(effective, DELIBERATE_FLOOR)
+    effective = max(0.0, min(1.0, effective))
+    if effective < ENCODE_THRESHOLD and not (force or deliberate):
+        return {"status": "rejected", "reason": "low_salience", "salience": effective}
+    session_id, cwd, repo_root = _r(session_id), _r(cwd), _r(repo_root)
+    mid = cortex.insert(
+        kind, content, gist=_gist(content), keywords=_keywords(content), salience=effective,
+        session_id=session_id, cwd=cwd, repo_root=repo_root,
+        vector=vectorize.embed(content), embedder_id=embedder_id,
+        meta=_redact_meta(meta or {}))
+    return {"status": "created", "id": mid, "kind": kind, "salience": effective}
+
+
+def remember(cortex, content, **kw):
+    """Voluntary write: deliberate encode."""
+    kw["deliberate"] = True
+    return encode(cortex, content, **kw)
+
+
+def reflect(cortex, content, cited_ids=(), **kw):
+    """Deliberate write linked by `abstracts` edges to the cited memories."""
+    kw["deliberate"] = True
+    kw.setdefault("kind", "semantic")
+    res = encode(cortex, content, **kw)
+    if res["status"] == "created":
+        for cid in cited_ids or ():
+            if cid != res["id"] and cortex.get(cid) is not None:
+                cortex.link(res["id"], cid, "abstracts")
+    return res
+
+
+def forget(cortex, mid):
+    """Suppress (not delete) a memory, stamping meta['suppressed_at']."""
+    m = cortex.get(mid)
+    if m is None:
+        return False
+    meta = dict(m["meta"])
+    meta["suppressed_at"] = cortex.clock()
+    cortex.update(mid, meta=meta, status="suppressed")
+    return True
+
+
+def observe(cortex, content, session_id=None, role=None, cwd=None, repo_root=None,
+            embedder_id=vectorize.EMBEDDER_ID):
+    """Involuntary pathway: always journal (redacted); promote if durable."""
+    content = _clean(content)
+    if not content.strip():
+        return {"journal_id": None, "promoted": None}
+    session_id, role, cwd, repo_root = _r(session_id), _r(role), _r(cwd), _r(repo_root)
+    jid = cortex.journal_add(content, session_id=session_id, role=role, cwd=cwd,
+                             repo_root=repo_root)
+    promoted = None
+    if durability(content) >= OBSERVE_DURABILITY:
+        promoted = encode(cortex, content, session_id=session_id, cwd=cwd,
+                          repo_root=repo_root, embedder_id=embedder_id)
+    return {"journal_id": jid, "promoted": promoted}
