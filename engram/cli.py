@@ -89,7 +89,11 @@ def build_parser():
     s.add_argument("--status")
     s.add_argument("--limit", type=_pos_int, default=None)
     s.add_argument("--offset", type=int, default=None)
-    add("export-rules", "write host rule files (not yet available)")
+    s = add("export-rules", "write .claude/engram_learned.md and .cursor/rules/engram_learned.mdc "
+                            "for this repository (whole files owned by Engram)")
+    s.add_argument("--target", choices=["all", "claude", "cursor"], default="all")
+    s.add_argument("--if-changed", action="store_true",
+                   help="only refresh existing Engram-owned files; create nothing, quiet")
     add("reembed", "re-embed stored vectors (not yet available)")
     return p
 
@@ -204,7 +208,10 @@ def _spawned_by_me():
 
 def cmd_sleep(args):
     r = client.cli_call("sleep", {"deep": not args.quick})
-    return _finish(r, args, lambda r: _out("sleep cycle done"))
+    rc = _finish(r, args, lambda r: _out("sleep cycle done"))
+    if rc == EXIT_OK and r.get("ok"):
+        _refresh_exports()
+    return rc
 
 
 def cmd_recall(args):
@@ -250,8 +257,11 @@ def cmd_remember(args):
 
 
 def cmd_forget(args):
-    return _finish(client.cli_call("forget", {"id": args.id}), args,
-                   lambda r: _out("forgotten %s" % args.id))
+    rc = _finish(client.cli_call("forget", {"id": args.id}), args,
+                 lambda r: _out("forgotten %s" % args.id))
+    if rc == EXIT_OK:
+        _refresh_exports()
+    return rc
 
 
 def cmd_dump(args):
@@ -265,6 +275,40 @@ def cmd_dump(args):
     return _finish(client.cli_call("dump", p), args, fmt)
 
 
+def _refresh_exports():
+    """After forget/sleep: refresh already-exported files (quiet, best effort). The daemon
+    cannot write files, so this client-side call (and SessionEnd) is where re-export happens."""
+    try:
+        from engram import export
+        export.run(os.getcwd(), if_changed=True)
+    except Exception:
+        pass
+
+
+def cmd_export_rules(args):
+    from engram import export
+    targets = tuple(export.TARGETS) if args.target == "all" else (args.target,)
+    r = export.run(os.getcwd(), targets=targets, if_changed=args.if_changed)
+    strict = _strict(args)
+    if args.json:
+        _out(json.dumps(r, sort_keys=True))
+    if r.get("offline"):
+        if not args.if_changed:
+            _err("daemon is not running; export files left untouched (start it with `mnemo up`)")
+        return EXIT_OFFLINE if strict else EXIT_OK
+    for w in r["warnings"]:
+        _err(w)
+    if not r["ok"]:
+        _err(str(r.get("error") or "export failed"))
+        return EXIT_ERROR if strict else EXIT_OK
+    if not args.json and not args.if_changed:
+        for t, st in sorted(r["results"].items()):
+            _out("%s/%s: %s" % (export.TARGETS[t][0], export.TARGETS[t][1], st))
+    if r["refused"]:
+        return EXIT_ERROR if strict else EXIT_OK
+    return EXIT_OK
+
+
 def _later(args):
     _err("%s is not yet available" % args.cmd)
     return EXIT_NA if _strict(args) else EXIT_OK
@@ -272,7 +316,7 @@ def _later(args):
 
 COMMANDS = {"status": cmd_status, "up": cmd_up, "sleep": cmd_sleep, "recall": cmd_recall,
             "remember": cmd_remember, "forget": cmd_forget, "dump": cmd_dump,
-            "export-rules": _later, "reembed": _later}
+            "export-rules": cmd_export_rules, "reembed": _later}
 
 
 def main(argv=None):

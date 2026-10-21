@@ -386,6 +386,8 @@ def encode(cortex, content, kind=None, salience=None, force=False, deliberate=Fa
         return {"status": "rejected", "reason": "low_salience", "salience": effective}
     session_id, cwd, repo_root = _r(session_id), _r(cwd), _r(repo_root)
     meta = _redact_meta(meta or {})
+    if deliberate:
+        meta["deliberate"] = True  # confidence floor for export-rules (R25)
     window = dedup_fts_window()
     capped = (cortex.db.execute("SELECT MAX(rowid) FROM memories").fetchone()[0] or 0) > window
     if capped:  # trace: a duplicate of an old memory may have been missed (ADR 0008)

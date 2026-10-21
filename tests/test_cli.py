@@ -241,7 +241,7 @@ class Usage(unittest.TestCase):
         self.assertIn("exit codes", r.stdout)
 
     def test_later_tasks_say_not_yet_available(self):
-        for c in ("export-rules", "reembed"):
+        for c in ("reembed",):
             r = run("/nonexistent-engram-home", c)
             self.assertEqual(r.returncode, 0)
             self.assertIn("not yet available", r.stderr)
