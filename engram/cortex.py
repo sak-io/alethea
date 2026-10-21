@@ -3,6 +3,7 @@
 One connection; the caller holds the lock. No activation logic here.
 """
 import json
+import math
 import os
 import sqlite3
 import time
@@ -15,6 +16,42 @@ KINDS = ("episodic", "semantic", "procedural", "identity")
 DECAY = {"episodic": 0.5, "semantic": 0.2, "procedural": 0.1, "identity": 0.0}
 STATUSES = ("active", "archived", "suppressed")
 EDGE_STEP = 0.15
+ARCHIVE_ACTIVATION = -3.2
+DAY_S = 86400.0
+MIN_AGE_DAYS = 1.0 / 1440  # 1-minute floor
+MIN_STRENGTH = 1e-3
+DOWNSCALE_FACTOR = 0.93
+# Downscale periods per day, per kind (ADR 0003 item 4: d_kind/0.5). Uniform option: all 1.0.
+DOWNSCALE_RATE = {"episodic": 1.0, "semantic": 0.4, "procedural": 0.2, "identity": 0.0}
+UNIFORM_RATE = {"episodic": 1.0, "semantic": 1.0, "procedural": 1.0, "identity": 0.0}
+RECENCY_WEIGHT = 0.3
+RECENCY_TAU_DAYS = 7.0
+
+
+def _finite(x, default):
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return default
+    return x if math.isfinite(x) else default
+
+
+def base_activation(kind, strength, salience, age_days, since_access_days=None):
+    """ADR 0003: B = ln(n_eff/(1-d)) - d*ln(age) + 1.6*(s-0.5) + recency; n_eff = strength.
+
+    Always finite: NaN/inf/negative inputs fall back to floors/defaults.
+    Recency term: RECENCY_WEIGHT * exp(-days_since_access / RECENCY_TAU_DAYS) = 0.3*exp(-days/7).
+    """
+    if kind not in DECAY:
+        raise ValueError("unknown kind: %r" % (kind,))
+    d = DECAY[kind]
+    n = max(_finite(strength, MIN_STRENGTH), MIN_STRENGTH)
+    age = max(_finite(age_days, MIN_AGE_DAYS), MIN_AGE_DAYS)
+    b = math.log(n / (1.0 - d)) - (d * math.log(age) if d else 0.0)
+    b += 1.6 * (min(max(_finite(salience, 0.5), 0.0), 1.0) - 0.5)
+    since = max(_finite(since_access_days, age), 0.0)
+    b += RECENCY_WEIGHT * math.exp(-since / RECENCY_TAU_DAYS)
+    return b
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS memories (
@@ -138,6 +175,19 @@ class Cortex:
             "last_access=? WHERE id=?", (amount, self.clock(), mid))
         self.db.commit()
         return cur.rowcount > 0
+
+    def activation(self, mem, now=None):
+        """Activation of a memory (dict or id) at `now` (default: injected clock)."""
+        if isinstance(mem, str):
+            mem = self.get(mem)
+            if mem is None:
+                raise KeyError("no such memory")
+        now = _finite(self.clock() if now is None else now, 0.0)
+        created = _finite(mem["created_at"], now)
+        last = _finite(mem["last_access"], created)
+        age = max(now - created, 0.0) / DAY_S
+        since = max(now - last, 0.0) / DAY_S
+        return base_activation(mem["kind"], mem["strength"], mem["salience"], age, since)
 
     def set_status(self, mid, status):
         if status not in STATUSES:
