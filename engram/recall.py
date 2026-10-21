@@ -109,7 +109,11 @@ def candidates(cortex, cue, pool=POOL, embedder_id=vectorize.EMBEDDER_ID):
 
 
 def spread(cortex, hits, limit=K):
-    """2-hop spreading activation from the top direct hits (minimal; refined later)."""
+    """2-hop spreading activation from the top direct hits (R15).
+
+    Score decays by edge weight and SPREAD_DAMP per hop; direct hits are excluded;
+    only active memories are returned or propagated through. No reinforcement.
+    """
     seen = {h["id"] for h in hits}
     found = {}
     frontier = [(h["id"], h["score"]) for h in hits[:SPREAD_TOP]]
@@ -118,8 +122,11 @@ def spread(cortex, hits, limit=K):
         for src, sc in frontier:
             for e in cortex.edges_from(src):
                 dst = e["dst"]
-                s = sc * e["weight"] * SPREAD_DAMP
+                s = sc * min(max(e["weight"], 0.0), 1.0) * SPREAD_DAMP
                 if dst in seen or s <= found.get(dst, 0.0):
+                    continue
+                dm = cortex.get(dst)
+                if dm is None or dm["status"] != "active":
                     continue
                 found[dst] = s
                 nxt.append((dst, s))
@@ -172,3 +179,72 @@ def recall(cortex, cue, k=K, pool=POOL, reinforce=True, embedder_id=vectorize.EM
         for m in results:
             cortex.reinforce(m["id"], SPREAD_BOOST if m["via"] == "spread" else HIT_BOOST)
     return results
+
+
+BRIEF_IDENTITY, BRIEF_FACTS, BRIEF_EPISODES = 5, 8, 3
+BRIEF_MAX_BYTES = 4096
+BRIEF_LINE_CHARS = 300
+REPO_BOOST = 0.5
+
+
+def _scope(mem, repo_root, cwd):
+    """'repo' if in the session's repo/cwd, 'none' if unscoped, 'other' otherwise."""
+    if repo_root:
+        if mem.get("repo_root") == repo_root:
+            return "repo"
+        return "none" if not (mem.get("repo_root") or mem.get("cwd")) else "other"
+    if cwd:
+        if mem.get("cwd") == cwd:
+            return "repo"
+        return "none" if not (mem.get("cwd") or mem.get("repo_root")) else "other"
+    return "none"
+
+
+def briefing(cortex, repo_root=None, cwd=None, max_bytes=BRIEF_MAX_BYTES):
+    """Session-start briefing (R17). Does NOT reinforce anything (G6).
+
+    Order: identity (<=5), top-activation semantic+procedural (<=8; repo-scoped get
+    REPO_BOOST, unscoped and other-repo stay eligible), recent episodic (<=3, same
+    repo/cwd or unscoped). Active only. Returns {"text", "items"}; text <= max_bytes UTF-8.
+    """
+    now = cortex.clock()
+
+    def active(kinds):
+        q = ",".join("?" * len(kinds))
+        return [cortex.get(r["id"]) for r in cortex.db.execute(
+            "SELECT id FROM memories WHERE status='active' AND kind IN (%s)" % q, kinds)]
+
+    items = [("identity", m) for m in _identity_rows(cortex, BRIEF_IDENTITY)]
+    facts = []
+    for m in active(("semantic", "procedural")):
+        a = cortex.activation(m, now)
+        if _scope(m, repo_root, cwd) == "repo":
+            a += REPO_BOOST
+        facts.append((-a, m["id"], m))
+    facts.sort(key=lambda t: t[:2])
+    items += [("fact", t[2]) for t in facts[:BRIEF_FACTS]]
+    eps = []
+    for m in active(("episodic",)):
+        sc = _scope(m, repo_root, cwd)
+        if sc == "other":
+            continue
+        t = m["last_access"] if m["last_access"] is not None else m["created_at"]
+        eps.append((-(t + (REPO_BOOST * 86400.0 if sc == "repo" else 0.0)), m["id"], m))
+    eps.sort(key=lambda t: t[:2])
+    items += [("episode", t[2]) for t in eps[:BRIEF_EPISODES]]
+
+    lines, used, out = [], 0, []
+    for label, m in items:
+        body = " ".join((m.get("gist") or m["content"])[:BRIEF_LINE_CHARS * 4].split())
+        line = "[%s] %s\n" % (label, body[:BRIEF_LINE_CHARS])
+        n = len(line.encode("utf-8"))
+        if used + n > max_bytes:
+            line = line.encode("utf-8")[:max(max_bytes - used, 0)].decode("utf-8", "ignore")
+            if line:
+                lines.append(line)
+                out.append(m)
+            break
+        lines.append(line)
+        out.append(m)
+        used += n
+    return {"text": "".join(lines), "items": out}
