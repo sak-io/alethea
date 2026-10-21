@@ -82,6 +82,7 @@ GROUPS = [
 class TestStemVsPorter(unittest.TestCase):
     def setUp(self):
         self.db = sqlite3.connect(":memory:")
+        self.addCleanup(self.db.close)
         try:
             self.db.execute("create virtual table t using fts5(x, tokenize='porter unicode61')")
         except sqlite3.OperationalError:

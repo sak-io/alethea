@@ -63,7 +63,9 @@ class SkeletonTest(unittest.TestCase):
         self.assertEqual(config.home_dir({"ENGRAM_HOME": "/x/y"}), Path("/x/y"))
 
     def test_sqlite_fts5_available(self):
-        sqlite3.connect(":memory:").execute("create virtual table t using fts5(a)")
+        db = sqlite3.connect(":memory:")
+        self.addCleanup(db.close)
+        db.execute("create virtual table t using fts5(a)")
 
 
 if __name__ == "__main__":

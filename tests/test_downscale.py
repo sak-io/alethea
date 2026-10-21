@@ -19,6 +19,7 @@ class DownscaleTest(unittest.TestCase):
     def setUp(self):
         self.clock = Clock()
         self.c = Cortex(":memory:", clock=self.clock)
+        self.addCleanup(self.c.close)
 
     def prime(self):
         """First call only sets the marker (0 elapsed)."""
@@ -52,6 +53,7 @@ class DownscaleTest(unittest.TestCase):
     def test_bad_last_downscale_clamps_to_zero_elapsed(self):
         for bad in ("garbage", "nan", "inf", "32503680000", ""):  # last is year 3000
             c = Cortex(":memory:", clock=self.clock)
+            self.addCleanup(c.close)
             mid = c.insert("episodic", "e", strength=4.0)
             c.meta_set("last_downscale", bad)
             self.clock.days(30)

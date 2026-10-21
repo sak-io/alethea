@@ -150,6 +150,7 @@ class ConsolidateTest(unittest.TestCase):
     def setUp(self):
         self.clock = Clock()
         self.c = Cortex(":memory:", clock=self.clock)
+        self.addCleanup(self.c.close)
 
     def feed(self, turns, session="s1", step=10.0):
         for t in turns:

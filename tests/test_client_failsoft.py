@@ -305,12 +305,13 @@ class Autostart(Base):
                 "end=time.time()+8\n"
                 "while time.time()<end:\n"
                 "  c,_=s.accept();c.recv(4096);c.sendall(b'{\"ok\":true}\\n');c.close()\n")
-        pids = []
+        pids, procs = [], []
         orig = subprocess.Popen
 
         def spy(*a, **k):
             p = orig(*a, **k)
             pids.append(p.pid)
+            procs.append(p)  # keep the handle so it can be reaped (no ResourceWarning)
             return p
         client.subprocess.Popen = spy
         try:
@@ -327,6 +328,8 @@ class Autostart(Base):
                     os.kill(p, signal.SIGKILL)
                 except OSError:
                     pass
+            for p in procs:
+                p.wait(timeout=5)
 
     def _no_spawn(self, wait):
         calls = []
