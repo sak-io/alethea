@@ -1,7 +1,8 @@
 """mnemo CLI: argument parsing and formatting over engram.client. No engine logic.
 
-Exit codes: 0 ok | 1 daemon refused the request | 2 usage error | 3 daemon unreachable |
-4 not yet available. Results go to stdout; messages and errors go to stderr.
+Exit codes: 0 ok, and also when the daemon is offline or a command is not yet available
+(fail-soft: a one-line note goes to stderr) | 1 daemon refused the request | 2 usage error |
+3 daemon offline and 4 not yet available, both only with --strict / MNEMO_STRICT=1. Results go to stdout; messages and errors go to stderr.
 The token is never printed.
 """
 import argparse
@@ -13,8 +14,9 @@ import time
 from engram import client, gitctx
 
 EXIT_OK, EXIT_ERROR, EXIT_USAGE, EXIT_OFFLINE, EXIT_NA = 0, 1, 2, 3, 4
-EPILOG = ("exit codes: 0 ok; 1 daemon returned an error; 2 usage error; "
-          "3 daemon unreachable (try `mnemo up`); 4 not yet available. "
+EPILOG = ("exit codes: 0 ok, or daemon offline / not yet available (one-line note on "
+          "stderr; fail-soft); 1 daemon refused the request; 2 usage error; with --strict "
+          "or MNEMO_STRICT=1: 3 daemon offline (try `mnemo up`), 4 not yet available. "
           "Pass '-' as CONTENT/CUE to read it from stdin.")
 UP_TIMEOUT = 5.0
 
@@ -50,6 +52,9 @@ def build_parser():
     p = _Parser(prog="mnemo", description="Engram memory CLI.", epilog=EPILOG,
                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--json", action="store_true", help="machine-readable JSON on stdout")
+    p.add_argument("--strict", action="store_true",
+                   help="exit 3 when the daemon is offline, 4 when not yet available "
+                        "(also MNEMO_STRICT=1)")
     sub = p.add_subparsers(dest="cmd", metavar="COMMAND", parser_class=_Parser)
     sub.required = True
 
@@ -58,6 +63,8 @@ def build_parser():
                            formatter_class=argparse.RawDescriptionHelpFormatter)
         s.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
                        help="machine-readable JSON on stdout")
+        s.add_argument("--strict", action="store_true", default=argparse.SUPPRESS,
+                       help="exit non-zero when the daemon is offline")
         return s
 
     add("status", "show daemon and memory counts")
@@ -97,6 +104,13 @@ def _text_arg(v):
     return sys.stdin.read() if v == "-" else v
 
 
+def _too_large(text, limit):
+    if len(text) > limit:
+        _err("content too large: max %d characters (got %d)" % (limit, len(text)))
+        return True
+    return False
+
+
 def _ctx():
     cwd = os.getcwd()
     return {"cwd": cwd, "repo_root": gitctx.repo_root(cwd)}
@@ -107,13 +121,24 @@ def _oneline(s, n=200):
     return s if len(s) <= n else s[:n - 3] + "..."
 
 
+def _strict(args):
+    return bool(getattr(args, "strict", False)) or os.environ.get("MNEMO_STRICT") == "1"
+
+
+def _offline_exit(args):
+    return EXIT_OFFLINE if _strict(args) else EXIT_OK
+
+
 def _finish(r, args, fmt):
     """Common exit handling; fmt(r) prints the human form."""
     if r.get("offline"):
         if args.json:
             _out(json.dumps(r))
+        if client.ping(timeout=0.5):
+            _err("request refused or connection dropped (daemon is running)")
+            return EXIT_ERROR
         _err("daemon is not running (start it with `mnemo up`)")
-        return EXIT_OFFLINE
+        return _offline_exit(args)
     if args.json:
         _out(json.dumps(r, sort_keys=True))
     elif r.get("ok"):
@@ -141,23 +166,33 @@ def cmd_status(args):
     r = client.cli_call("status")
     if r.get("offline") and not args.json:
         _err("daemon: down (start it with `mnemo up`)")
-        return EXIT_OFFLINE
+        return _offline_exit(args)
     return _finish(r, args, _fmt_status)
 
 
 def cmd_up(args):
-    if client.ping(timeout=0.5):
-        r = {"ok": True, "started": False}
-    else:
-        r = {"ok": bool(client.autostart(wait=max(0.1, args.timeout))), "started": True}
+    r = {"ok": True, "started": False}
+    if not client.ping(timeout=0.5):
+        client.autostart(wait=max(0.1, args.timeout))
+        r["ok"] = client.ping(timeout=1.0)
+        r["started"] = r["ok"] and _spawned_by_me()
     if args.json:
         _out(json.dumps(r))
     elif r["ok"]:
         _out("daemon started" if r["started"] else "daemon already running")
     if not r["ok"]:
         _err("daemon did not come up (TCP/sidecar mode or start failure)")
-        return EXIT_OFFLINE
+        return _offline_exit(args)
     return EXIT_OK
+
+
+def _spawned_by_me():
+    """autostart() stamps its spawner's pid under the lock; only the spawner matches."""
+    try:
+        with open(os.path.join(client._home(None), "autostart.stamp")) as f:
+            return f.read().strip() == str(os.getpid())
+    except OSError:
+        return False
 
 
 def cmd_sleep(args):
@@ -170,6 +205,9 @@ def cmd_recall(args):
     p["cue"] = _text_arg(args.cue)
     if not p["cue"].strip():
         _err("empty cue")
+        return EXIT_USAGE
+    from engram.daemon import MAX_CUE_CHARS
+    if _too_large(p["cue"], MAX_CUE_CHARS):
         return EXIT_USAGE
     if args.k:
         p["k"] = args.k
@@ -188,6 +226,9 @@ def cmd_remember(args):
     p["content"] = _text_arg(args.content)
     if not p["content"].strip():
         _err("empty content")
+        return EXIT_USAGE
+    from engram.daemon import MAX_CONTENT_CHARS
+    if _too_large(p["content"], MAX_CONTENT_CHARS):
         return EXIT_USAGE
     if args.kind:
         p["kind"] = args.kind
@@ -217,7 +258,7 @@ def cmd_dump(args):
 
 def _later(args):
     _err("%s is not yet available" % args.cmd)
-    return EXIT_NA
+    return EXIT_NA if _strict(args) else EXIT_OK
 
 
 COMMANDS = {"status": cmd_status, "up": cmd_up, "sleep": cmd_sleep, "recall": cmd_recall,

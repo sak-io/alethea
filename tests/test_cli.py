@@ -103,8 +103,64 @@ class RoundTrip(WithDaemon):
 
     def test_token_never_printed(self):
         tok = "s3cret-token-value"
-        r = run(self.home, "status", extra_env={"ENGRAM_TOKEN": tok})
-        self.assertNotIn(tok, r.stdout + r.stderr)
+        for args in (["status"], ["--json", "status"], ["forget", "nope"],
+                     ["--json", "forget", "nope"], ["remember", "x" * 100000],
+                     ["--strict", "up"], ["bogus"]):
+            r = run(self.home, *args, extra_env={"ENGRAM_TOKEN": tok})
+            self.assertNotIn(tok, r.stdout + r.stderr, args)
+
+    def test_oversize_remember_clear_message(self):
+        r = run(self.home, "remember", "-", stdin="a" * 5_000_000)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("content too large: max 200000", r.stderr)
+        self.assertNotIn("not running", r.stderr)
+
+    def test_dropped_request_is_not_reported_offline(self):
+        import socket
+        import threading
+        home = make_home()
+        srv = socket.socket(socket.AF_UNIX)
+        srv.bind(os.path.join(home, "engram.sock"))
+        srv.listen(8)
+
+        def loop():
+            while True:
+                try:
+                    c, _ = srv.accept()
+                except OSError:
+                    return
+                line = c.makefile("rb").readline()
+                if b'"ping"' in line:
+                    c.sendall(b'{"ok":true,"pong":true}\n')
+                c.close()
+        threading.Thread(target=loop, daemon=True).start()
+        try:
+            r = run(home, "dump")
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("refused or connection dropped", r.stderr)
+        finally:
+            srv.close()
+            shutil.rmtree(home, ignore_errors=True)
+
+    def test_epipe_with_head(self):
+        for i in range(30):
+            run(self.home, "remember", "Penguin fact number %d about glaciers" % i)
+        env = dict(os.environ, ENGRAM_HOME=self.home, PYTHONDONTWRITEBYTECODE="1")
+        r = subprocess.run("%s %s dump | head -1" % (sys.executable, MNEMO), shell=True,
+                           env=env, capture_output=True, text=True, cwd="/tmp")
+        self.assertEqual(len(r.stdout.splitlines()), 1)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertNotIn("BrokenPipe", r.stderr)
+
+    def test_keyboard_interrupt_exit_130(self):
+        code = ("import sys\nfrom engram import cli\n"
+                "def boom(a): raise KeyboardInterrupt\n"
+                "cli.COMMANDS['status']=boom\nsys.exit(cli.main(['status']))")
+        env = dict(os.environ, PYTHONPATH=ROOT, PYTHONDONTWRITEBYTECODE="1")
+        r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True,
+                           text=True)
+        self.assertEqual(r.returncode, 130)
+        self.assertNotIn("Traceback", r.stderr)
 
 
 class Offline(unittest.TestCase):
@@ -114,11 +170,41 @@ class Offline(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.home, ignore_errors=True)
 
-    def test_every_daemon_command_fails_soft_with_exit_3(self):
-        for args in (["status"], ["sleep"], ["recall", "x"], ["remember", "x"],
-                     ["forget", "abc"], ["dump"]):
-            r = run(self.home, *args)
+    CMDS = (["status"], ["sleep"], ["recall", "x"], ["remember", "x"],
+            ["forget", "abc"], ["dump"])
+
+    def test_strict_flag_and_env_exit_3(self):
+        for args in self.CMDS:
+            self.assertEqual(run(self.home, "--strict", *args).returncode, 3, args)
+            self.assertEqual(run(self.home, *args, "--strict").returncode, 3, args)
+            r = run(self.home, *args, extra_env={"MNEMO_STRICT": "1"})
             self.assertEqual(r.returncode, 3, args)
+
+    def test_up_failing_strict(self):
+        env = {"ENGRAM_PORT": "1"}
+        self.assertEqual(run(self.home, "up", "--timeout", "0.3", extra_env=env).returncode, 0)
+        r = run(self.home, "--strict", "up", "--timeout", "0.3", extra_env=env)
+        self.assertEqual(r.returncode, 3)
+
+    def test_hung_daemon_returns_within_budget(self):
+        import socket
+        import time
+        srv = socket.socket(socket.AF_UNIX)
+        srv.bind(os.path.join(self.home, "engram.sock"))
+        srv.listen(8)
+        try:
+            t = time.time()
+            r = run(self.home, "status")
+            self.assertLess(time.time() - t, 20)
+            self.assertEqual(r.returncode, 0)
+            self.assertNotIn("Traceback", r.stderr)
+        finally:
+            srv.close()
+
+    def test_every_daemon_command_fails_soft_with_exit_0(self):
+        for args in self.CMDS:
+            r = run(self.home, *args)
+            self.assertEqual(r.returncode, 0, args)
             self.assertNotIn("Traceback", r.stderr)
             self.assertEqual(r.stdout, "", args)
             self.assertTrue(r.stderr.strip(), args)
@@ -130,7 +216,7 @@ class Offline(unittest.TestCase):
 
     def test_offline_json_is_valid(self):
         r = run(self.home, "--json", "status")
-        self.assertEqual(r.returncode, 3)
+        self.assertEqual(r.returncode, 0)
         self.assertTrue(json.loads(r.stdout)["offline"])
 
 
@@ -151,8 +237,9 @@ class Usage(unittest.TestCase):
     def test_later_tasks_say_not_yet_available(self):
         for c in ("export-rules", "reembed"):
             r = run("/nonexistent-engram-home", c)
-            self.assertEqual(r.returncode, 4)
+            self.assertEqual(r.returncode, 0)
             self.assertIn("not yet available", r.stderr)
+            self.assertEqual(run("/nonexistent-engram-home", "--strict", c).returncode, 4)
 
 
 class Up(unittest.TestCase):
@@ -176,11 +263,30 @@ class Up(unittest.TestCase):
                     pass
             shutil.rmtree(home, ignore_errors=True)
 
+    def test_concurrent_up_only_one_claims_started(self):
+        home = make_home()
+        pid = None
+        try:
+            env = dict(os.environ, ENGRAM_HOME=home, PYTHONDONTWRITEBYTECODE="1")
+            env.pop("ENGRAM_PORT", None)
+            ps = [subprocess.Popen([sys.executable, MNEMO, "up"], env=env,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                  for _ in range(5)]
+            outs = [p.communicate(timeout=60) + (p.returncode,) for p in ps]
+            self.assertTrue(all(o[2] == 0 for o in outs), outs)
+            self.assertTrue(all("running" in o[0] or "started" in o[0] for o in outs), outs)
+            self.assertLessEqual(sum("started" in o[0] for o in outs), 1, outs)
+            pid = json.loads(run(home, "status", "--json").stdout)["pid"]
+        finally:
+            if pid:
+                os.kill(pid, signal.SIGTERM)
+            shutil.rmtree(home, ignore_errors=True)
+
     def test_up_in_tcp_mode_fails_soft(self):
         home = make_home()
         try:
             r = run(home, "up", "--timeout", "0.5", extra_env={"ENGRAM_PORT": "1"})
-            self.assertEqual(r.returncode, 3)
+            self.assertEqual(r.returncode, 0)
             self.assertNotIn("Traceback", r.stderr)
         finally:
             shutil.rmtree(home, ignore_errors=True)
