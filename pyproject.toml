@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "engram-memory"  # PyPI name NOT confirmed; confirm before any publish
+dynamic = ["version"]
+description = "Long-term memory for AI coding agents: local daemon, mnemo CLI, MCP server, Claude Code hooks (stdlib only)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+dependencies = []
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+]
+
+[project.urls]
+Repository = "https://github.com/sak-io/engram"
+
+[project.scripts]
+mnemo = "engram.cli:main"
+engram-daemon = "engram.daemon:main"
+engram-hook = "engram.hooks.engram_hook:main"
+engram-mcp = "engram.mcp_server:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "engram.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["engram*"]
