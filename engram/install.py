@@ -6,8 +6,9 @@ two identical.
 
 Safety contract (all tested in tests/test_install.py):
   * merge, never replace: every other key, permission, hook and their order survive;
-  * entries we own are recognised by their args signature (`-m engram.hooks.engram_hook`),
-    updated in place on reinstall (second run: unchanged, nothing written);
+  * entries we own are recognised by their signature (a python interpreter command with args
+    `-I -m engram.hooks.engram_hook`, or the two legacy forms below), updated in place on
+    reinstall (second run: unchanged, nothing written);
   * uninstall removes only owned entries (and the containers it leaves empty);
   * invalid JSON / a non-object `hooks` is refused with the file untouched;
   * writes are atomic (temp file in the same directory, fsync, rename), keep the file mode and
@@ -20,6 +21,7 @@ import difflib
 import errno
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -28,7 +30,12 @@ import sys
 from engram.export import Refused, _open_dir
 
 HOOK_MODULE = "engram.hooks.engram_hook"
-OWNED_ARGS = ["-m", HOOK_MODULE]
+# -I (isolated mode): `python -m` otherwise puts the CURRENT directory first on sys.path, so a
+# project containing a fake `engram/` package would run its code in every session there.
+OWNED_ARGS = ["-I", "-m", HOOK_MODULE]
+LEGACY_ARGS = (["-m", HOOK_MODULE],)  # first installer version; still recognised as ours
+LEGACY_SCRIPT_SUFFIX = "/engram/hooks/engram_hook.py"  # T23 static block (script path)
+_PYTHON_RE = re.compile(r"^python(\d+(\.\d+)*)?(\.exe)?$")
 EVENTS = ("SessionStart", "UserPromptSubmit", "Stop", "SessionEnd", "PreCompact")
 TIMEOUT_S = 5
 SESSION_END_TIMEOUT_S = 3  # the hook has its own 2 s deadline; CC's default 1.5 s would cancel it
@@ -67,7 +74,19 @@ def template_text(python="/ABSOLUTE/PATH/TO/python"):
 
 
 def is_owned(handler):
-    return isinstance(handler, dict) and handler.get("args") == OWNED_ARGS
+    """Ours = a python interpreter running our hook module/script, in a known signature.
+    A handler that merely mentions engram (other command, other path, other args) is not."""
+    if not isinstance(handler, dict) or handler.get("type", "command") != "command":
+        return False
+    cmd, args = handler.get("command"), handler.get("args")
+    if not isinstance(cmd, str) or not isinstance(args, list):
+        return False
+    if not _PYTHON_RE.match(os.path.basename(cmd)):
+        return False
+    if args == OWNED_ARGS or args in list(LEGACY_ARGS):
+        return True
+    return (len(args) == 1 and isinstance(args[0], str)
+            and args[0].endswith(LEGACY_SCRIPT_SUFFIX))
 
 
 # ------------------------------------------------------------------ pure merge / remove
@@ -75,9 +94,9 @@ def is_owned(handler):
 def _check_shape(settings):
     if not isinstance(settings, dict):
         raise InstallError("settings file is not a JSON object; refusing to touch it")
-    hooks = settings.get("hooks")
-    if hooks is None:
+    if "hooks" not in settings:
         return
+    hooks = settings["hooks"]
     if not isinstance(hooks, dict):
         raise InstallError("the `hooks` key is not an object; refusing to touch the file")
     for event, groups in hooks.items():
@@ -286,6 +305,9 @@ def parse_settings(raw, label):
         raise InstallError("%s is empty (not valid JSON); refusing to touch it" % label)
     try:
         data = json.loads(text)
+    except (RecursionError, MemoryError):
+        raise InstallError("%s is too deeply nested or too large to process; refusing to touch it"
+                           % label)
     except ValueError as e:
         raise InstallError("%s is not valid JSON (%s); refusing to touch it" % (label, e))
     _check_shape(data)
@@ -310,6 +332,12 @@ def apply(scope, action, dry_run=False, cwd=None, environ=None, python=None):
         dfd = _open_target_dir(directory, create, dir_mode)
     except FileNotFoundError:
         dfd = None
+    except Refused as e:
+        hint = ""
+        if os.path.islink(directory):
+            hint = ("; to use the real directory run: CLAUDE_CONFIG_DIR=%s mnemo %s claude-code"
+                    % (os.path.realpath(directory), action)) if scope == "user" else ""
+        raise InstallError("%s%s" % (e, hint))
     except OSError as e:
         raise InstallError("cannot open %s: %s" % (directory, e.strerror or e))
     try:
@@ -329,12 +357,26 @@ def apply(scope, action, dry_run=False, cwd=None, environ=None, python=None):
                "diff": "", "events": installed_events(new)}
         if not changed:
             return res
+        backup = name + BACKUP_SUFFIX
+        # uninstall that leaves nothing but `{}` and has no backup (so the installer created the
+        # file): delete it, and its directory if that is now empty
+        delete = (action == "uninstall" and new == {} and dfd is not None
+                  and not _exists(dfd, backup))
+        res["deleted"] = delete
         res["diff"] = "".join(difflib.unified_diff(
-            old_text.splitlines(True), new_text.splitlines(True),
-            fromfile=path if raw is not None else "/dev/null", tofile=path))
+            old_text.splitlines(True), "" if delete else new_text.splitlines(True),
+            fromfile=path if raw is not None else "/dev/null",
+            tofile="/dev/null" if delete else path))
         if dry_run:
             return res
-        backup = name + BACKUP_SUFFIX
+        if delete:
+            os.unlink(name, dir_fd=dfd)
+            try:
+                os.fsync(dfd)
+            except OSError:
+                pass
+            res["removed_dir"] = _rmdir_if_empty(directory, dfd)
+            return res
         # the backup protects the user's own content; an Engram-only file has none to protect
         if raw is not None and new != {} and not _exists(dfd, backup):
             _write_new(dfd, backup, raw, mode, exclusive=True)
@@ -345,6 +387,22 @@ def apply(scope, action, dry_run=False, cwd=None, environ=None, python=None):
     finally:
         if dfd is not None:
             os.close(dfd)
+
+
+def _rmdir_if_empty(directory, dfd):
+    """Remove `directory` only if it has no entries (never a symlink: dfd was opened NOFOLLOW)."""
+    try:
+        if os.listdir(dfd):
+            return False
+        parent, name = os.path.split(os.path.abspath(directory))
+        pfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.rmdir(name, dir_fd=pfd)
+        finally:
+            os.close(pfd)
+        return True
+    except OSError:
+        return False
 
 
 def _exists(dfd, name):
@@ -375,7 +433,7 @@ def status(scope, cwd=None, environ=None):
 
 def mcp_command(scope, python=None):
     return ["claude", "mcp", "add", "--scope", scope, "engram", "--", python or sys.executable,
-            "-m", "engram.mcp_server"]
+            "-I", "-m", "engram.mcp_server"]
 
 
 def register_mcp(scope, out, err):
@@ -428,6 +486,12 @@ def run(args, out=None, err=None):
         err("%s%s" % (e.strerror or type(e).__name__,
                       " (%s)" % e.filename if e.filename else ""))
         return EXIT_USER
+    except (RecursionError, MemoryError):
+        err("the settings file is too deeply nested or too large to process; file untouched")
+        return EXIT_USER
+    except Exception as e:  # never a traceback, and exit 1 is reserved for `--mcp` failures
+        err("unexpected error: %s; the settings file was not modified" % type(e).__name__)
+        return EXIT_USER
 
 
 def _run(args, out, err):
@@ -468,7 +532,11 @@ def _run(args, out, err):
     elif cmd == "install":
         out("%s: %s" % ("created" if res["created"] else "updated", res["path"]))
         out("hooks written for: %s" % ", ".join(res["events"]))
-        out("interpreter: %s -m %s" % (sys.executable, HOOK_MODULE))
+        out("command: %s %s" % (sys.executable, " ".join(OWNED_ARGS)))
+        rc = 0
+    elif res.get("deleted"):
+        out("removed: %s (it contained only Engram's hooks)%s" % (
+            res["path"], "; removed the now-empty directory" if res.get("removed_dir") else ""))
         rc = 0
     else:
         out("updated: %s (Engram hooks removed; nothing else touched)" % res["path"])

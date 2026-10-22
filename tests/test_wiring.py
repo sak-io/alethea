@@ -12,6 +12,7 @@ import unittest
 
 from engram import install
 from tests.daemon_helpers import ROOT, make_home
+from tests.install_helpers import installed_python
 
 SETTINGS = os.path.join(ROOT, ".claude", "settings.json")
 MCP = os.path.join(ROOT, ".mcp.json")
@@ -84,7 +85,7 @@ class GeneratedHooksTest(unittest.TestCase):
         for event, _, h in hook_handlers(self.s):
             self.assertEqual(h["type"], "command", event)
             self.assertEqual(h["command"], sys.executable)
-            self.assertEqual(h["args"], ["-m", "engram.hooks.engram_hook"])
+            self.assertEqual(h["args"], ["-I", "-m", "engram.hooks.engram_hook"])
             self.assertNotIn("${", json.dumps(h))
 
     def test_timeouts_are_seconds_within_hook_deadline(self):
@@ -102,6 +103,7 @@ class GeneratedHooksTest(unittest.TestCase):
 
     def test_hook_command_lines_run_offline_exit_0_with_empty_stdout(self):
         home = make_home()
+        self.s = install.hooks_block(installed_python())  # -I ignores PYTHONPATH: needs a real install
         payloads = {
             "SessionStart": {"source": "startup"},
             "UserPromptSubmit": {"prompt": "we decided to use PostgreSQL"},
@@ -242,7 +244,7 @@ class ReadmeTest(unittest.TestCase):
         blocks = re.findall(r"```json\n(.*?)```", self.text, re.S)
         parsed = [json.loads(b) for b in blocks]
         self.assertTrue(any(x.get("mcpServers", {}).get("engram", {}).get("args")
-                            == ["-m", "engram.mcp_server"] for x in parsed))
+                            == ["-I", "-m", "engram.mcp_server"] for x in parsed))
 
     def test_project_readme_has_no_contributor_capture_notice(self):
         with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as f:

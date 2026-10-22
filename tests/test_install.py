@@ -17,7 +17,7 @@ from tests.daemon_helpers import ROOT, make_home
 MNEMO = os.path.join(ROOT, "scripts", "mnemo")
 TEMPLATE = os.path.join(ROOT, "integrations", "claude-code", "settings.hooks.json")
 EVENTS = install.EVENTS
-OWNED = ["-m", "engram.hooks.engram_hook"]
+OWNED = ["-I", "-m", "engram.hooks.engram_hook"]
 
 
 def ns(cmd="install", scope="user", dry_run=False, status=False, mcp=False):
@@ -91,7 +91,7 @@ class BlockTest(unittest.TestCase):
 
 class MergeTest(unittest.TestCase):
     def test_preserves_everything_and_order(self):
-        out = install.merge(FOREIGN, "/py")
+        out = install.merge(FOREIGN, "/v/python")
         self.assertEqual(list(out), list(FOREIGN))
         self.assertEqual(out["permissions"], FOREIGN["permissions"])
         self.assertEqual(out["env"], FOREIGN["env"])
@@ -106,8 +106,8 @@ class MergeTest(unittest.TestCase):
     def test_input_not_mutated(self):
         import copy
         before = copy.deepcopy(FOREIGN)
-        install.merge(FOREIGN, "/py")
-        install.remove(install.merge(FOREIGN, "/py"))
+        install.merge(FOREIGN, "/v/python")
+        install.remove(install.merge(FOREIGN, "/v/python"))
         self.assertEqual(FOREIGN, before)
 
     def test_reinstall_updates_in_place_and_is_idempotent(self):
@@ -118,30 +118,30 @@ class MergeTest(unittest.TestCase):
 
     def test_in_place_keeps_position_among_foreign_groups(self):
         s = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "a"}]},
-                               install.hook_group("Stop", "/old"),
+                               install.hook_group("Stop", "/old/python"),
                                {"hooks": [{"type": "command", "command": "b"}]}]}}
-        out = install.merge(s, "/new")["hooks"]["Stop"]
-        self.assertEqual([g["hooks"][0]["command"] for g in out], ["a", "/new", "b"])
+        out = install.merge(s, "/new/python")["hooks"]["Stop"]
+        self.assertEqual([g["hooks"][0]["command"] for g in out], ["a", "/new/python", "b"])
 
     def test_owned_handler_sharing_a_group_is_replaced_not_the_group(self):
         s = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "a"},
-                                           install.hook_handler("Stop", "/old")]}]}}
-        out = install.merge(s, "/new")["hooks"]["Stop"]
+                                           install.hook_handler("Stop", "/old/python")]}]}}
+        out = install.merge(s, "/new/python")["hooks"]["Stop"]
         self.assertEqual(len(out), 1)
-        self.assertEqual([h["command"] for h in out[0]["hooks"]], ["a", "/new"])
+        self.assertEqual([h["command"] for h in out[0]["hooks"]], ["a", "/new/python"])
 
     def test_duplicate_owned_entries_collapse_to_one(self):
-        s = {"hooks": {"Stop": [install.hook_group("Stop", "/a"), install.hook_group("Stop", "/b")]}}
-        out = install.merge(s, "/c")["hooks"]["Stop"]
+        s = {"hooks": {"Stop": [install.hook_group("Stop", "/a/python"), install.hook_group("Stop", "/b/python")]}}
+        out = install.merge(s, "/c/python")["hooks"]["Stop"]
         self.assertEqual(len(out), 1)
-        self.assertEqual(out[0]["hooks"][0]["command"], "/c")
+        self.assertEqual(out[0]["hooks"][0]["command"], "/c/python")
 
     def test_uninstall_removes_only_owned(self):
-        out = install.remove(install.merge(FOREIGN, "/py"))
+        out = install.remove(install.merge(FOREIGN, "/v/python"))
         self.assertEqual(out, FOREIGN)
 
     def test_uninstall_drops_empty_hooks_key_and_events(self):
-        s = install.merge({"permissions": {"allow": []}}, "/py")
+        s = install.merge({"permissions": {"allow": []}}, "/v/python")
         self.assertEqual(install.remove(s), {"permissions": {"allow": []}})
 
     def test_uninstall_without_ours_changes_nothing_even_empty_containers(self):
@@ -150,8 +150,50 @@ class MergeTest(unittest.TestCase):
         s = {"hooks": {"Stop": []}}
         self.assertEqual(install.remove(s), s)
 
+    def test_legacy_signatures_are_ours_and_updated_in_place_never_duplicated(self):
+        old_module = {"type": "command", "command": "/old/venv/bin/python",
+                      "args": ["-m", "engram.hooks.engram_hook"], "timeout": 5}
+        old_script = {"type": "command", "command": "python3",
+                      "args": ["/home/u/engram/engram/hooks/engram_hook.py"], "timeout": 5}
+        old_var = {"type": "command", "command": "python3",
+                   "args": ["${CLAUDE_PROJECT_DIR}/engram/hooks/engram_hook.py"], "timeout": 5}
+        for legacy in (old_module, old_script, old_var):
+            self.assertTrue(install.is_owned(legacy), legacy)
+            s = {"hooks": {"Stop": [{"hooks": [dict(legacy)]}]}}
+            out = install.merge(s, "/new/python")
+            self.assertEqual(len(out["hooks"]["Stop"]), 1)
+            self.assertEqual(out["hooks"]["Stop"][0]["hooks"][0]["args"], OWNED)
+            self.assertEqual(out["hooks"]["Stop"][0]["hooks"][0]["command"], "/new/python")
+            self.assertNotIn("Stop", install.remove(s).get("hooks", {}))
+
+    def test_foreign_hooks_that_merely_mention_engram_are_not_owned(self):
+        mod = "engram.hooks.engram_hook"
+        foreign = [
+            {"type": "command", "command": "python3", "args": ["engram"]},
+            {"type": "command", "command": "engram-notify --module engram.hooks.engram_hook"},
+            {"type": "command", "command": "python3", "args": ["/other/hooks/engram_hook.py"]},
+            {"type": "command", "command": "python3", "args": ["/x/engram_hook.py"]},
+            {"type": "command", "command": "python3", "args": ["/x/engram/hooks/engram_hook.sh"]},
+            {"type": "command", "command": "echo", "args": ["-I", "-m", mod]},
+            {"type": "command", "command": "/usr/bin/node", "args": ["-m", mod]},
+            {"type": "command", "command": "python3", "args": ["-I", "-m", mod, "--extra"]},
+            {"type": "command", "command": "python3", "args": ["-m", "engram.hooks.engram_hook2"]},
+            {"type": "command", "command": "python3 -m " + mod},
+            {"type": "command", "command": "python3", "args": "-I -m " + mod},
+            {"type": "command", "command": "python3", "env": {"x": mod}},
+            {"type": "prompt", "command": "python3", "args": ["-I", "-m", mod]},
+            "engram.hooks.engram_hook", None, 5,
+        ]
+        for h in foreign:
+            self.assertFalse(install.is_owned(h), h)
+        s = {"hooks": {e: [{"hooks": [dict(h) if isinstance(h, dict) else h]}
+                           for h in foreign] for e in EVENTS}}
+        out = install.remove(install.merge(s, "/v/python"))
+        self.assertEqual(out, s)
+
     def test_shape_errors(self):
-        for bad in ([], {"hooks": []}, {"hooks": "x"}, {"hooks": {"Stop": {}}}):
+        for bad in ([], {"hooks": []}, {"hooks": "x"}, {"hooks": None},
+                    {"hooks": {"Stop": {}}}):
             with self.assertRaises(install.InstallError):
                 install.merge(bad)
             with self.assertRaises(install.InstallError):
@@ -204,10 +246,40 @@ class FileTest(Base):
                 ((e, g, h) for e in EVENTS for g in self.read()["hooks"][e] for h in g["hooks"])}
         self.assertEqual(cmds, {"/elsewhere/python"})
 
-    def test_uninstall_leaves_file_without_hooks(self):
+    def test_uninstall_deletes_file_and_dir_the_installer_created(self):
         self.run_cmd()
         self.assertEqual(self.run_cmd(cmd="uninstall"), 0)
-        self.assertEqual(self.read(), {})
+        self.assertFalse(os.path.exists(self.path))
+        self.assertFalse(os.path.exists(self.cfg))
+
+    def test_uninstall_keeps_dir_with_other_entries(self):
+        self.run_cmd()
+        other = os.path.join(self.cfg, "keep.txt")
+        with open(other, "w") as f:
+            f.write("x")
+        self.assertEqual(self.run_cmd(cmd="uninstall"), 0)
+        self.assertFalse(os.path.exists(self.path))
+        self.assertTrue(os.path.isfile(other))
+
+    def test_uninstall_keeps_file_when_user_content_remains(self):
+        self.write(FOREIGN)
+        self.run_cmd()
+        self.run_cmd(cmd="uninstall")
+        self.assertEqual(self.read(), FOREIGN)
+
+    def test_uninstall_keeps_empty_object_file_that_has_a_backup(self):
+        self.write({"hooks": {}})
+        self.run_cmd()
+        self.run_cmd(cmd="uninstall")
+        self.assertTrue(os.path.exists(self.path))
+        self.assertNotIn("hooks", self.read())
+
+    def test_dry_run_uninstall_of_only_ours_shows_deletion(self):
+        self.run_cmd()
+        self.out.clear()
+        self.assertEqual(self.run_cmd(cmd="uninstall", dry_run=True), 0)
+        self.assertTrue(os.path.exists(self.path))
+        self.assertIn("+++ /dev/null", "\n".join(self.out))
 
     def test_uninstall_when_nothing_to_do(self):
         self.assertEqual(self.run_cmd(cmd="uninstall"), 0)
@@ -239,6 +311,7 @@ class FileTest(Base):
         before = self.text()
         self.assertEqual(self.run_cmd(cmd="uninstall", dry_run=True), 0)
         self.assertEqual(self.text(), before)
+        self.assertIn("-I", before)
 
     def test_refuses_invalid_json(self):
         for bad in ("{not json", "", "[1]", "   ", "\xff\xfe"):
@@ -260,6 +333,38 @@ class FileTest(Base):
             self.assertEqual(self.text(), bad)
             self.assertIn("hooks", self.err[-1])
 
+    def test_hooks_null_and_other_non_objects_are_user_errors(self):
+        for bad in ('{"hooks": null}', '{"hooks": 0}', '{"hooks": false}', '{"hooks": []}'):
+            for cmd in ("install", "uninstall"):
+                self.write(bad)
+                self.err.clear()
+                self.assertEqual(self.run_cmd(cmd=cmd), 2, (bad, cmd))
+                self.assertEqual(self.text(), bad)
+                self.assertIn("hooks", self.err[-1])
+                self.assertNotIn("unexpected", self.err[-1])
+
+    def test_pathological_json_is_a_user_error_not_a_crash(self):
+        deep = "[" * 100000 + "]" * 100000
+        for bad in (deep, '{"a": ' * 5000 + "1" + "}" * 5000,
+                    '{"x": "' + "a" * (5 * 1024 * 1024) + '"}'):
+            self.write(bad)
+            self.err.clear()
+            self.assertEqual(self.run_cmd(), 2)
+            self.assertEqual(self.run_cmd(cmd="uninstall"), 2)
+            self.assertEqual(self.text(), bad)
+            self.assertTrue(self.err)
+            self.assertNotIn("Traceback", "".join(self.err))
+
+    def test_deep_but_parseable_json_is_handled_without_exit_1(self):
+        # parses (depth < recursion limit) but may overflow in merge/dump: any outcome but 1
+        self.write('{"k": ' + "[" * 800 + "]" * 800 + "}")
+        self.assertIn(self.run_cmd(), (0, 2))
+
+    def test_unexpected_internal_error_is_exit_2_not_1(self):
+        with mock.patch("engram.install.apply", side_effect=KeyError("boom")):
+            self.assertEqual(self.run_cmd(), 2)
+        self.assertIn("unexpected", self.err[-1])
+
     def test_refuses_symlinked_target_file(self):
         real = os.path.join(self.tmp, "real.json")
         self.write("{}", real)
@@ -276,6 +381,7 @@ class FileTest(Base):
         self.assertEqual(self.run_cmd(), 2)
         self.assertEqual(os.listdir(real), [])
         self.assertIn("symlink", self.err[-1])
+        self.assertIn("CLAUDE_CONFIG_DIR=%s" % os.path.realpath(real), self.err[-1])
 
     def test_no_temp_files_left_behind(self):
         self.write(FOREIGN)
@@ -314,7 +420,7 @@ class FileTest(Base):
         with mock.patch("shutil.which", return_value=None):
             self.assertEqual(self.run_cmd(mcp=True), 0)
         joined = "\n".join(self.out)
-        self.assertIn("claude mcp add --scope user engram -- %s -m engram.mcp_server"
+        self.assertIn("claude mcp add --scope user engram -- %s -I -m engram.mcp_server"
                       % sys.executable, joined)
 
     def test_mcp_runs_claude_list_form_when_present(self):
@@ -330,7 +436,7 @@ class FileTest(Base):
         with open(log) as f:
             self.assertEqual(f.read().split("\n")[:-1],
                              ["mcp", "add", "--scope", "user", "engram", "--", sys.executable,
-                              "-m", "engram.mcp_server"])
+                              "-I", "-m", "engram.mcp_server"])
         self.assertIn("added", "\n".join(self.out))
 
     def test_mcp_failure_is_exit_1_but_hooks_stay_written(self):
@@ -375,8 +481,7 @@ class CliTest(unittest.TestCase):
         p = self.mnemo("install", "claude-code", "--status")
         self.assertIn("installed", p.stdout)
         self.assertEqual(self.mnemo("uninstall", "claude-code").returncode, 0)
-        with open(path) as f:
-            self.assertNotIn("hooks", json.load(f))
+        self.assertFalse(os.path.exists(path))
 
     def test_local_scope_writes_settings_local_json_at_git_root(self):
         r = self.repo()

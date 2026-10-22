@@ -8,6 +8,7 @@
             "type": "command",
             "command": "/ABSOLUTE/PATH/TO/python",
             "args": [
+              "-I",
               "-m",
               "engram.hooks.engram_hook"
             ],
@@ -23,6 +24,7 @@
             "type": "command",
             "command": "/ABSOLUTE/PATH/TO/python",
             "args": [
+              "-I",
               "-m",
               "engram.hooks.engram_hook"
             ],
@@ -38,6 +40,7 @@
             "type": "command",
             "command": "/ABSOLUTE/PATH/TO/python",
             "args": [
+              "-I",
               "-m",
               "engram.hooks.engram_hook"
             ],
@@ -53,6 +56,7 @@
             "type": "command",
             "command": "/ABSOLUTE/PATH/TO/python",
             "args": [
+              "-I",
               "-m",
               "engram.hooks.engram_hook"
             ],
@@ -68,6 +72,7 @@
             "type": "command",
             "command": "/ABSOLUTE/PATH/TO/python",
             "args": [
+              "-I",
               "-m",
               "engram.hooks.engram_hook"
             ],

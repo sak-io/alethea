@@ -22,7 +22,7 @@ Claude Code hooks (T22), the Claude Code installer and packaging (part of T30) a
 
 ```sh
 pipx install engram-memory                                 # PyPI name to be confirmed; NOT published yet
-pipx install git+https://github.com/sak-io/engram          # works today
+pipx install git+https://github.com/sak-io/engram          # once this branch is merged to main (or add @<ref> for a specific ref)
 # or: pip install engram-memory / pip install git+https://github.com/sak-io/engram
 mnemo install claude-code                                  # hooks into ~/.claude/settings.json (or $CLAUDE_CONFIG_DIR)
 mnemo install claude-code --mcp                            # also register the MCP server (needs the `claude` CLI)
