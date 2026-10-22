@@ -1,0 +1,30 @@
+---
+id: build-feature
+description: Implements a work item end to end - developer writes code plus unit and integration tests and opens a PR, then pr-reviewer and developer iterate until the reviewer approves. Can run several independent tasks in parallel.
+---
+
+
+# /build-feature [task id or description]
+
+1. **Pick work.** Read `docs/architecture/work-breakdown.md` and open PRs. Choose the next task whose dependencies are merged (or the one the human named). For parallel work, choose only tasks that are independent and touch different files; cap at `max_parallel_developers` (config, default 3).
+2. **Develop.** Invoke the builder role that fits the task (`developer`, or `backend-developer` / `frontend-developer` / `mobile-developer` / `data-engineer` / `ml-engineer` / `ai-engineer` / `devops-engineer` / …, whichever the team has) (one per task, in parallel if several; use `isolation: worktree` so they don't collide). Each opens a PR labelled `agent:needs-review`.
+3. **Review loop** — for each PR:
+   ```
+   round = 1
+   loop:
+     Invoke `pr-reviewer` on the PR (round number, previous comments)
+       VERDICT: APPROVED           -> exit loop (label agent:approved)
+       VERDICT: CHANGES REQUESTED  -> Invoke the same builder role with PR number + instruction to address every comment
+                                      round += 1; if round > max_review_rounds -> label needs-human, escalate
+   ```
+4. **Hand-off.** When approved, tell the human which PRs are approved and proceed to `/release-check` for each.
+
+For multi-component projects, tasks are tagged by component; run the contract task first, then components in parallel (they only conflict on the contract).
+
+## Quality bars you enforce
+- A PR with no unit tests or no integration tests (where a boundary is crossed) goes straight back to the developer.
+- CI must be green on the latest commit before each review round starts.
+- The developer must satisfy the active archetype's **Testing strategy** (see `.autocraft/archetypes/`); the reviewer enforces it.
+- Never merge. Never skip a loop round.
+
+After each PR, give the human a 3-line summary: what was built, test evidence, review rounds taken.

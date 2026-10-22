@@ -1,0 +1,1147 @@
+#!/usr/bin/env python3
+"""autocraft - build and customize AI agent teams for software projects.
+
+One tool-neutral definition of roles, teams, workflows, archetypes and capabilities
+(this repo) is exported into the native format of whichever AI tool you use.
+
+    autocraft list [roles|teams|workflows|archetypes|capabilities|tools]
+    autocraft recommend "I want an app where students book yoga classes and pay"
+    autocraft init [DIR] --tool claude-code,cursor --team web-product --archetype fullstack-app ...
+    autocraft sync [DIR]                 regenerate tool files from .autocraft/config.yml
+    autocraft add-role|remove-role ID    edit the roster      (then sync happens automatically)
+    autocraft add-tool|remove-tool ID    edit the tool list
+    autocraft new-role ID                scaffold a custom role in .autocraft/custom/roles/
+    autocraft github [DIR] --lang L      add CI, security scanning and GitHub templates
+    autocraft doctor [DIR]               check the setup
+
+Standard library only (Python 3.8+).
+"""
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import sys
+from pathlib import Path
+
+FW = Path(__file__).resolve().parent.parent  # framework root (clone or vendored copy)
+
+ALWAYS_ON_CAPS = ["secrets-and-config", "deployment-hosting", "analytics-observability"]
+LANGS = {  # lang: (CodeQL language or "", Dependabot ecosystem)
+    "node": ("javascript-typescript", "npm"), "python": ("python", "pip"), "go": ("go", "gomod"),
+    "java": ("java-kotlin", "maven"), "dotnet": ("csharp", "nuget"), "rust": ("", "cargo"),
+    "flutter": ("", "pub"), "terraform": ("", "terraform"),
+}
+TOOLS = {
+    "claude-code": "Claude Code (terminal, desktop, web and the Claude app's code sessions) - subagents + slash commands",
+    "claude-app": "Claude app chat Projects (no repo access) - project instructions + knowledge files",
+    "cursor": "Cursor - .cursor/rules",
+    "copilot": "GitHub Copilot - custom agents, prompt files, instructions",
+    "gemini-cli": "Gemini CLI - GEMINI.md + custom commands",
+    "windsurf": "Windsurf - .windsurf/rules",
+    "cline": "Cline - .clinerules",
+    "agents-md": "AGENTS.md - the open convention read by Codex, Jules, Zed, Aider, Cursor, Copilot and many more",
+    "prompts": "Plain prompt files to paste into any chat (ChatGPT, Gemini, ...)",
+}
+TOOL_ALIASES = {"claude": "claude-code", "codex": "agents-md", "aider": "agents-md", "jules": "agents-md",
+                "gemini": "gemini-cli", "chatgpt": "prompts", "claude-chat": "claude-app", "claude-projects": "claude-app"}
+NEEDS_NEUTRAL_COPIES = {"agents-md", "gemini-cli", "cline"}  # tools that point at .autocraft/roles + workflows
+ROLE_HATS_TOOLS = {"claude-app", "cursor", "gemini-cli", "windsurf", "cline", "agents-md", "prompts"}  # no real subagents
+
+SAFE_COMMANDS = ["Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(git add:*)", "Bash(git commit:*)",
+                 "Bash(git switch:*)", "Bash(git checkout:*)", "Bash(git merge:*)", "Bash(git worktree:*)", "Bash(git branch:*)",
+                 "Bash(git fetch:*)", "Bash(git push -u origin:*)", "Bash(python3 .autocraft/framework/bin/autocraft:*)",
+                 "Bash(python3 -m pytest:*)", "Bash(pytest:*)", "Bash(npm test:*)", "Bash(npm run:*)", "Bash(ls:*)"]
+
+BEGIN, END = "<!-- autocraft:begin (managed block - edit .autocraft/custom/, then run autocraft sync) -->", "<!-- autocraft:end -->"
+
+EXPERIENCE = {
+    "beginner": ("Write for someone who has never worked in software. Define every technical term in a few words the first "
+                 "time. Lead summaries with what it means for the person and whether they need to do anything. Do not ask "
+                 "them to choose technologies: recommend a default, give a one-line reason, record it as an ADR. Keep "
+                 "questions few, concrete and answerable with 'yes / default'. Offer the `explain` workflow for anything dense."),
+    "intermediate": "Use normal engineering terminology with a brief rationale. Offer options when they matter.",
+    "expert": "Be terse. Show trade-offs and alternatives. Ask only for genuine decisions.",
+}
+
+# keyword hints for `recommend` (deterministic first guess; the discover workflow is the smart version)
+ARCH_KEYWORDS = {
+    "static-site": "website, landing page, blog, portfolio, brochure, marketing site, docs site, personal site",
+    "web-app": "web app, web application, browser, single page, frontend, front end",
+    "fullstack-app": "saas, accounts, sign up, signup, login, log in, subscription, marketplace, booking, bookings, book a spot, book classes, book, reserve, reservation, appointment, appointments, schedule, members, membership, students, customers, clients, orders, cancel, spots, store, shop, e-commerce, ecommerce, platform where, add classes, add products, manage",
+    "mobile-app": "mobile, phone, smartphone, ios, android, iphone, app store, play store, phone app, mobile app",
+    "desktop-app": "desktop app, windows app, mac app, macos, electron, installer, desktop software",
+    "game": "game, player, levels, multiplayer, unity, godot, arcade, puzzle",
+    "internal-tool": "admin panel, back office, back-office, internal tool, internal dashboard, crm, approvals, for my team, ops dashboard",
+    "chat-bot": "slack bot, discord bot, telegram, teams bot, whatsapp, chatbot for slack, bot",
+    "plugin-extension": "extension, plugin, add-on, addon, chrome extension, vscode extension, shopify app, wordpress, github action",
+    "api-service": "api, backend, back end, endpoint, rest, graphql, microservice, web service",
+    "realtime-service": "real-time, realtime, live updates, websocket, collaboration, collaborative, presence, live chat",
+    "event-processor": "queue, event-driven, webhook, consumer, stream processing, process events, message broker",
+    "scheduled-job": "nightly, every night, daily, every hour, hourly, weekly, cron, scheduled, recurring, batch job",
+    "script-automation": "script, automate, automation, scrape, scraper, rename files, spreadsheet, chore, repetitive",
+    "data-pipeline": "etl, pipeline, data warehouse, warehouse, analytics, sync data, data sources, reporting data",
+    "ml-service": "machine learning, predict, prediction, classifier, recommendation, forecast, train a model, ml model",
+    "ai-assistant": "questions about, ai, llm, gpt, claude, chatbot, assistant, rag, copilot, agent, ask questions about, summarize, generative",
+    "library-cli": "library, sdk, package, cli, command line, command-line, npm package, pip package, developers install",
+    "infrastructure": "terraform, infrastructure, cloud setup, kubernetes, devops, deploy pipeline, aws setup, iac",
+    "embedded-iot": "iot, arduino, raspberry pi, sensor, firmware, microcontroller, smart device, esp32",
+}
+
+
+# ----------------------------------------------------------------------------- parsing helpers
+def parse_val(v):
+    v = v.strip()
+    if v.startswith("[") and v.endswith("]"):
+        inner = v[1:-1].strip()
+        return [x.strip().strip("'\"") for x in inner.split(",") if x.strip()] if inner else []
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+        return v[1:-1]
+    return v
+
+
+def parse_md(path):
+    text = Path(path).read_text()
+    meta, body = {}, text
+    if text.startswith("---\n"):
+        _, fm, body = text.split("---\n", 2) if text.count("---\n") >= 2 else ("", "", text)
+        for line in fm.splitlines():
+            if ":" in line and not line.startswith(" "):
+                k, v = line.split(":", 1)
+                meta[k.strip()] = parse_val(v)
+    return meta, body.lstrip("\n")
+
+
+def load_dir(sub, fw=FW):
+    out = {}
+    d = fw / sub
+    if d.is_dir():
+        for f in sorted(d.glob("*.md")):
+            if f.name == "README.md":
+                continue
+            meta, body = parse_md(f)
+            meta.setdefault("id", f.stem)
+            meta["body"], meta["path"] = body, f
+            out[meta["id"]] = meta
+    return out
+
+
+def first_sentence(s, limit=160):
+    s = re.split(r"(?<=[.!?])\s", s.strip())[0]
+    return s if len(s) <= limit else s[: limit - 1].rstrip() + "…"
+
+
+def yq(s):  # safe YAML double-quoted scalar
+    return json.dumps(s, ensure_ascii=False)
+
+
+def sha(text):
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def as_list(v):
+    return v if isinstance(v, list) else ([v] if v else [])
+
+
+# ----------------------------------------------------------------------------- config
+def role_models(cfg):
+    """config `role_models: [pr-reviewer=sonnet, qa-engineer=haiku]` -> {role: model} (Claude Code only)"""
+    out = {}
+    for item in as_list(cfg.get("role_models")):
+        if "=" not in item:
+            raise SystemExit(f"error: role_models entries look like role=model, got '{item}'")
+        r, m = item.split("=", 1)
+        if not re.fullmatch(r"[A-Za-z0-9._:-]+", m.strip()):
+            raise SystemExit(f"error: invalid model name '{m}'")
+        out[r.strip()] = m.strip()
+    return out
+
+
+CONFIG_KEYS_ORDER = ["autonomy_level", "max_review_rounds", "max_parallel_developers", "default_branch", "tools", "team",
+                     "roles_add", "roles_remove", "archetypes", "capabilities", "experience", "language", "human_owner", "sources", "git_mode", "role_models"]
+
+
+def config_path(proj):
+    return proj / ".autocraft" / "config.yml"
+
+
+def read_config(proj):
+    cfg = {}
+    p = config_path(proj)
+    if p.exists():
+        for line in p.read_text().splitlines():
+            m = re.match(r"^([A-Za-z_]+):\s*(.*)$", line)
+            if m:
+                raw = m.group(2).strip()
+                if raw[:1] in "\"'" and raw[:1]:
+                    raw = raw[: raw.index(raw[0], 1) + 1] if raw.count(raw[0]) >= 2 else raw
+                else:
+                    raw = re.sub(r"\s+#.*$", "", raw)
+                cfg[m.group(1)] = parse_val(raw)
+    return cfg
+
+
+def fmt_val(v):
+    if isinstance(v, list):
+        return "[" + ", ".join(v) + "]"
+    if v == "" or v is None:
+        return '""'
+    return str(v)
+
+
+def set_config(proj, updates):
+    p = config_path(proj)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    text = p.read_text() if p.exists() else (FW / "templates" / "autocraft-config.yml").read_text()
+    for k, v in updates.items():
+        line = f"{k}: {fmt_val(v)}"
+        pat = re.compile(rf"^{k}:[^\n#]*?(\s+#.*)?$", re.M)
+        if pat.search(text):
+            text = pat.sub(lambda m: line + ("  " + m.group(1).strip() if m.group(1) else ""), text, count=1)
+        else:
+            text = text.rstrip("\n") + f"\n{line}\n"
+    p.write_text(text)
+
+
+# ----------------------------------------------------------------------------- catalog
+def catalog(fw=FW):
+    caps = {}
+    for f in sorted((fw / "capabilities").glob("*.md")):
+        if f.name == "README.md":
+            continue
+        txt = f.read_text()
+        m = re.search(r"## Trigger words\n(.+)", txt)
+        caps[f.stem] = {"id": f.stem, "triggers": [t.strip() for t in m.group(1).split(",")] if m else [], "path": f}
+    arch = {}
+    for d in sorted((fw / "archetypes").iterdir()):
+        if (d / "archetype.md").exists():
+            txt = (d / "archetype.md").read_text()
+            m = re.search(r"## Summary\n(.+)", txt)
+            plain = re.search(r"## In plain words\n(.+)", txt)
+            arch[d.name] = {"id": d.name, "summary": m.group(1) if m else "", "plain": plain.group(1) if plain else "",
+                            "path": d / "archetype.md"}
+    return arch, caps
+
+
+RISK_FLAGS = {
+    "offline": "works offline / flaky connection: needs a local copy, a queue of changes and conflict rules; polling alone is not offline support",
+    "connection drops": "works offline / flaky connection: needs a local copy, a queue of changes and conflict rules; polling alone is not offline support",
+    "patchy signal": "works offline / flaky connection: needs a local copy, a queue of changes and conflict rules; polling alone is not offline support",
+    "push notification": "push notifications: need a scheduler and a delivery design (web push on iPhones needs the app installed to the home screen)",
+    "notification": "notifications: decide channel (push/email), schedule, opt-out and a test mode that does not really send",
+    "camera": "camera/barcode: browser camera needs HTTPS, results vary by phone; plan a manual fallback",
+    "barcode": "camera/barcode: browser camera needs HTTPS, results vary by phone; plan a manual fallback",
+    "real-time": "real-time updates: decide polling vs websockets and what 'quickly' means",
+    "claude api": "sends user data to an AI provider: privacy statement, consent, per-user limits and a spending cap",
+    "llm": "sends user data to an AI provider: privacy statement, consent, per-user limits and a spending cap",
+    "premium": "paid plan: needs payments, pricing and entitlement rules (price may still be undecided)",
+    "subscription": "paid plan: needs payments, pricing and entitlement rules",
+    "children": "children's data: privacy law (COPPA/GDPR-K) - involve a professional",
+    "health": "health data: regulated - involve a professional",
+    "row-level security": "per-tenant data isolation: must be tested thoroughly (one mistake exposes another household's data)",
+    "household": "multi-user data sharing: define who can see/change what, invites and removal",
+    "magic link": "email sign-in needs real email delivery (or a dev inbox in development)",
+    "testing": "check the plan's testing statement against the rule 'every change ships with tests'",
+}
+
+
+def count_hits(text, phrases):
+    n = 0
+    for p in phrases:
+        p = p.strip().lower()
+        if p and re.search(r"(?<![a-z0-9])" + re.escape(p) + r"(?![a-z0-9])", text):
+            n += 1
+    return n
+
+
+def cover_teams(archetypes, teams):
+    """smallest set of teams whose `fits` cover the archetypes (greedy)"""
+    full, remaining = [], set(archetypes)
+    while remaining:
+        best = max((t for t in teams.values() if t["id"] not in ("starter", "setup")),
+                   key=lambda t: len(remaining & set(as_list(t.get("fits")))), default=None)
+        if not best or not (remaining & set(as_list(best.get("fits")))):
+            break
+        full.append(best["id"])
+        remaining -= set(as_list(best.get("fits")))
+    return full
+
+
+def recommend(idea, fw=FW):
+    text = " " + idea.lower() + " "
+    arch, caps = catalog(fw)
+    teams = load_dir("teams", fw)
+    scores = {a: count_hits(text, kw.split(",")) for a, kw in ARCH_KEYWORDS.items() if a in arch}
+    chosen = [a for a, s in sorted(scores.items(), key=lambda x: -x[1]) if s > 0][:3]
+    cap_hits = [c for c, v in caps.items() if count_hits(text, v["triggers"]) > 0 and c not in ALWAYS_ON_CAPS]
+    # sensible implications
+    if "mobile-app" in chosen and ({"authentication", "database", "payments", "email-and-notifications", "file-uploads", "search"} & set(cap_hits) or "fullstack-app" in chosen) and "api-service" not in chosen:
+        chosen.append("api-service")
+    if "fullstack-app" in chosen:  # one project that already contains its screens and its API
+        for covered in ("web-app", "api-service"):
+            if covered in chosen and "mobile-app" not in chosen:
+                chosen.remove(covered)
+    if "ai-assistant" in chosen and "chat-bot" in chosen and scores.get("chat-bot", 0) <= 1 and not re.search(r"slack|discord|telegram|teams|whatsapp", text):
+        chosen.remove("chat-bot")
+    confident = bool(chosen)
+    if "fullstack-app" in chosen or "api-service" in chosen:
+        for c in ("authentication", "database"):
+            if c not in cap_hits and "fullstack-app" in chosen:
+                cap_hits.append(c)
+    also = [a for a, sc in sorted(scores.items(), key=lambda x: -x[1]) if sc > 0 and a not in chosen
+            and not (a in ("web-app", "api-service") and "fullstack-app" in chosen)][:3]
+    risks = []
+    for phrase, note in RISK_FLAGS.items():
+        if re.search(r"(?<![a-z0-9])" + re.escape(phrase), text) and note not in risks:
+            risks.append(note)
+    return {"archetypes": chosen, "also_mentioned": also, "capabilities": cap_hits, "lean_team": "starter",
+            "full_teams": cover_teams(chosen, teams) or ["starter"], "confident": confident, "risk_flags": risks,
+            "always_on": ALWAYS_ON_CAPS}
+
+
+# ----------------------------------------------------------------------------- roster
+def load_custom_teams(proj):
+    """teams defined by the project itself: .autocraft/custom/teams/<id>.md (same format as teams/*.md)"""
+    out = {}
+    d = Path(proj) / ".autocraft" / "custom" / "teams"
+    for f in sorted(d.glob("*.md")) if d.is_dir() else []:
+        meta, body = parse_md(f)
+        meta.setdefault("id", f.stem)
+        meta.setdefault("name", meta["id"])
+        meta.setdefault("summary", "Project-defined team")
+        meta["body"], meta["path"] = body, f
+        out[meta["id"]] = meta
+    return out
+
+
+def resolve_team_ids(cfg, fw=FW, proj=None):
+    teams = load_dir("teams", fw)
+    if proj is not None:
+        teams.update(load_custom_teams(proj))
+    ids = as_list(cfg.get("team")) or ["starter"]
+    for t in ids:
+        if t not in teams:
+            raise SystemExit(f"error: unknown team '{t}'. Known: {', '.join(teams)}")
+    return ids, teams
+
+
+def resolve_roster(cfg, proj, fw=FW):
+    roles = load_dir("roles", fw)
+    custom = proj / ".autocraft" / "custom" / "roles"
+    for f in sorted(custom.glob("*.md")) if custom.is_dir() else []:
+        if f.name.endswith(".append.md"):
+            continue
+        meta, body = parse_md(f)
+        meta.setdefault("id", f.stem)
+        meta["body"], meta["path"], meta["custom"] = body, f, True
+        roles[meta["id"]] = meta
+    team_ids, teams = resolve_team_ids(cfg, fw, proj)
+    ids = []
+    for t in team_ids:
+        for r in as_list(teams[t].get("roles")):
+            if r not in ids:
+                ids.append(r)
+    for r in as_list(cfg.get("roles_add")):
+        if r not in ids:
+            ids.append(r)
+    ids = [r for r in ids if r not in as_list(cfg.get("roles_remove"))]
+    for r in ids:
+        if r not in roles:
+            raise SystemExit(f"error: unknown role '{r}'. Known: {', '.join(roles)}")
+    wf_all = load_dir("workflows", fw)
+    have = set(ids)
+    ok = lambda w: set(as_list(wf_all[w].get("needs"))) <= have  # workflow's required roles are all present
+    wf = []
+    for t in team_ids:
+        for w in as_list(teams[t].get("workflows")):
+            if w in wf_all and w not in wf and ok(w):
+                wf.append(w)
+    for w in wf_all:  # roles you add switch on their workflows
+        if w not in wf and as_list(wf_all[w].get("needs")) and ok(w):
+            wf.append(w)
+    for w in (proj / ".autocraft" / "custom" / "workflows").glob("*.md") if (proj / ".autocraft" / "custom" / "workflows").is_dir() else []:
+        meta, body = parse_md(w)
+        meta.setdefault("id", w.stem)
+        meta["body"], meta["path"] = body, w
+        wf_all[meta["id"]] = meta
+        if meta["id"] not in wf:
+            wf.append(meta["id"])
+    return [roles[r] for r in ids], [wf_all[w] for w in wf], [teams[t] for t in team_ids]
+
+
+def read_custom(proj, rel):
+    p = proj / ".autocraft" / "custom" / rel
+    if not p.exists():
+        return ""
+    return re.sub(r"<!--.*?-->", "", p.read_text(), flags=re.S).strip()  # HTML comments are notes, not rules
+
+
+GIT_MODES = {
+    "session-branch": ("work on the branch the session started on; do NOT create or push other remote branches and do NOT open pull requests unless the "
+                       "owner asks. Parallel tasks use LOCAL `git worktree` branches (`feat/<task>`, never pushed) that the main session merges into the "
+                       "session branch with `git merge --no-ff` once the reviewer approved. Handoffs/reviews are files under `.autocraft/work/<task>/`, "
+                       "committed on the session branch. Push the session branch regularly (`git push -u origin HEAD`, retry on network errors) so work "
+                       "survives the session ending. 'Humans merge' means: nothing reaches `main` until the owner merges the session branch's pull request."),
+    "pr-per-task": ("each task on its own branch `feat/<task>`, pushed, with its own pull request and `agent:*` labels (protocol sections 3-4); reviews "
+                    "are PR reviews/comments; the owner merges every pull request."),
+}
+
+
+def effective_body(role, cfg, proj, roster, archetypes, capabilities, team_names):
+    exp = cfg.get("experience") or "beginner"
+    body = role["body"]
+    append = read_custom(proj, f"roles/{role['id']}.append.md")
+    team_rules = read_custom(proj, "team-rules.md")
+    sources = as_list(cfg.get("sources"))
+    git_mode = cfg.get("git_mode") or "session-branch"
+    colleagues = "\n".join(f"  - `{r['id']}`: {first_sentence(r.get('description', ''), 110)}" for r in roster if r["id"] != role["id"])
+    ctx = [
+        "## Project context (generated by autocraft)",
+        f"- **Team:** {', '.join(team_names)}. You are `{role['id']}`. Colleagues you hand off to or receive from:\n{colleagues}",
+        f"- **Software type (archetypes):** {', '.join(archetypes) or 'not chosen yet - run the `discover` workflow'}"
+        + ("; read each profile in `.autocraft/archetypes/<name>.md` and apply it." if archetypes else "."),
+        f"- **Capabilities in play:** {', '.join(capabilities)}; read each in `.autocraft/capabilities/<name>.md`: apply its *Safe defaults*, "
+        "test its *Must test* list, avoid its *Common mistakes*, prefer what it says not to build yourself.",
+        f"- **Audience (`experience: {exp}`):** {EXPERIENCE.get(exp, EXPERIENCE['beginner'])} Whatever the level: never lower quality gates, tests, "
+        "security checks, independent review or the human merge gate.",
+        "- **Protocol:** handoffs, severity tags, labels, review rounds and human gates are in `.autocraft/protocol.md`. "
+        f"Limits: {cfg.get('max_review_rounds', 3)} review rounds, {cfg.get('max_parallel_developers', 3)} parallel developers, autonomy level {cfg.get('autonomy_level', 2)}.",
+        "- **Collaboration surface:** use GitHub pull requests and labels when the project has them; otherwise exchange reviews as files under "
+        "`.autocraft/work/<task>/` (see protocol section 12).",
+        f"- **Git mode (`git_mode: {git_mode}`):** {GIT_MODES.get(git_mode, GIT_MODES['session-branch'])}",
+        "- **GitHub operations:** use the `gh` CLI if it is installed. If it is not (for example in Claude app / cloud sessions), use the session's "
+        "GitHub tools instead; the operation-by-operation mapping is in `.autocraft/protocol.md` section 13.",
+    ]
+    if sources:
+        ctx.insert(2, "- **Owner's source documents (authoritative inputs; read them before anything else):** " + ", ".join(f"`{x}`" for x in sources)
+                   + ". They express the owner's intent. Do not silently contradict or embellish them: record gaps, ambiguities and contradictions as numbered "
+                   "questions with a recommended default, and trace what you produce back to the section it came from.")
+    if team_rules:
+        ctx += ["", "### Team rules (project-specific)", team_rules]
+    if append:
+        ctx += ["", f"### Extra rules for `{role['id']}` (project-specific)", append]
+    lines = body.split("\n")
+    for i, l in enumerate(lines):
+        if l.startswith("# "):
+            return "\n".join(lines[: i + 1]) + "\n\n" + "\n".join(ctx) + "\n\n" + "\n".join(lines[i + 1:]).lstrip("\n")
+    return "\n".join(ctx) + "\n\n" + body
+
+
+# ----------------------------------------------------------------------------- exporters
+RULES = """## Non-negotiable rules
+1. Never commit to `main`; all changes go through a pull request (or a reviewed branch). **Never merge - humans merge.**
+2. Every behavior change ships with unit tests, and integration tests when it crosses a boundary (database, network, queue).
+3. Never commit secrets. Never disable or skip a test, check or protection to get green.
+4. `docs/architecture/` is the source of truth; declare any deviation in the PR.
+5. Review feedback uses severity tags `[BLOCKER] [MAJOR] [MINOR] [NIT] [QUESTION]`; blockers and majors must be resolved before approval.
+6. After the configured number of review rounds, stop and ask the human (`needs-human`).
+7. Hand off with the block in `.autocraft/protocol.md`; keep `docs/STATUS.md` current. State lives in the repo, not in chat memory."""
+
+
+def hats_text(tool):
+    if tool in ROLE_HATS_TOOLS:
+        return ("**This tool has no true sub-agents, so you run the team as role hats:** work one role at a time, announce "
+                "`Acting as: <role>`, and read that role's file first. **Use a fresh chat/session for every reviewing role** "
+                "(`pr-reviewer`, `principal-engineer`, `release-gatekeeper`, `qa-engineer`) and give it only the diff, the spec and the "
+                "protocol - not the author's reasoning - so the review is genuinely independent. Pass work between roles through files "
+                "(specs, reviews, `docs/STATUS.md`), not memory.")
+    if tool == "claude-code":
+        return ("Roles are Claude Code subagents with their own context. **You, the main session, are the team lead.**\n"
+                "- Delegate with the Agent tool using `subagent_type` = the role id (e.g. `architect`). If a role is not listed as an agent type yet "
+                "(its file was created this session), start a `general-purpose` agent and tell it to read `.claude/agents/<role>.md` first and follow it.\n"
+                "- Subagents cannot call subagents: run the loops yourself (author -> reviewer -> author) and enforce the round limit.\n"
+                "- Run independent tasks **in parallel** (background agents, each in its own `git worktree`); reviewers are always a **fresh agent** that "
+                "never sees the author's reasoning and must run the tests itself.\n"
+                "- Do not poll agents; wait for their completion notifications. After every step update `docs/STATUS.md` and commit.\n"
+                "- When you need the owner (a gate, a decision, a deadlock, release-ready) say exactly what you need, with a recommended default, at the "
+                "end of your message; if a push-notification tool is available, send one.\n"
+                "- The owner asking you to use this team is authorization to spawn these agents. Keep a lean start: do not spawn roles a task does not need.")
+    return ("Roles run as separate agents with their own context. A role cannot call another role; the main session coordinates the "
+            "loops (author -> reviewer -> author) and enforces the round limit.")
+
+
+def team_guide(tool, cfg, roster, workflows, teams, role_ref, wf_ref, archetypes, capabilities):
+    rows = "\n".join(f"| `{r['id']}` | {first_sentence(r.get('description', ''), 130)} | {role_ref(r)} |" for r in roster)
+    wf = "\n".join(f"- {wf_ref(w)} - {first_sentence(w.get('description', ''), 130)}" for w in workflows)
+    playbooks = "\n\n".join(t["body"].strip() for t in teams)
+    team_rules = read_custom(Path(cfg["_proj"]), "team-rules.md")
+    return f"""# Agent team (managed by autocraft)
+
+This project is built by a **team of role-specialised AI agents** working with a human owner. Teams: **{', '.join(t['name'] for t in teams)}**.
+Software type: {', '.join(archetypes) or '(not chosen yet - run `discover`)'} - Capabilities: {', '.join(capabilities)} - Audience level: {cfg.get('experience', 'beginner')}.
+
+## Roles
+| Role | What it does | How to invoke |
+|---|---|---|
+{rows}
+
+## Workflows
+{wf}
+
+## How to run the team in this tool
+{hats_text(tool)}
+
+{playbooks}
+
+{RULES}
+
+## Where things live
+Specs `docs/specs/` - architecture `docs/architecture/` (+`status.md`) - decisions `docs/adr/` - design `docs/design/` - status `docs/STATUS.md` -
+config `.autocraft/config.yml` - archetypes `.autocraft/archetypes/` - capabilities `.autocraft/capabilities/` - protocol `.autocraft/protocol.md` -
+customizations `.autocraft/custom/` (edit these, then `autocraft sync`).
+{('' if not team_rules else chr(10) + '## Team rules' + chr(10) + team_rules)}
+"""
+
+
+def toml_prompt(s):
+    return "'''\n" + s.replace("'''", "' ' '") + "\n'''"
+
+
+def export(tool, ctx):
+    """returns (files: {relpath: text}, blocks: {relpath: text})"""
+    cfg, roster, wfs, teams = ctx["cfg"], ctx["roster"], ctx["workflows"], ctx["teams"]
+    eff = ctx["eff"]  # role id -> effective body
+    A, C = ctx["archetypes"], ctx["capabilities"]
+    files, blocks = {}, {}
+    gen = lambda src: f"<!-- Generated by autocraft from {src}. Do not edit: customize in .autocraft/custom/ and run `autocraft sync`. -->"
+
+    def guide(role_ref, wf_ref):
+        return team_guide(tool, cfg, roster, wfs, teams, role_ref, wf_ref, A, C)
+
+    def wf_body(w):
+        pre = ("> Roles named below are separate agents in this tool." if tool in ("claude-code", "copilot") else
+               "> This tool has no sub-agents: wherever this says 'delegate to <role>' / 'invoke <role>', **switch hats** to that role "
+               "(read `.autocraft/roles/<role>.md` or its rule) and use a fresh session for reviewers.")
+        return f"{pre}\n\n{w['body'].strip()}\n"
+
+    if tool == "claude-code":
+        models = role_models(cfg)
+        for r in roster:
+            ab = as_list(r.get("abilities"))
+            tl = []
+            for a in ab:
+                tl += {"read": ["Read"], "search": ["Grep", "Glob"], "write": ["Write"], "edit": ["Edit"], "shell": ["Bash"]}.get(a, [])
+            files[f".claude/agents/{r['id']}.md"] = (f"---\nname: {r['id']}\ndescription: {yq(r.get('description', ''))}\n"
+                                                    f"tools: {', '.join(dict.fromkeys(tl))}\nmodel: {models.get(r['id']) or r.get('model') or 'inherit'}\n---\n{gen('roles/' + r['id'] + '.md')}\n\n{eff[r['id']]}")
+        for w in wfs:
+            files[f".claude/skills/{w['id']}/SKILL.md"] = f"---\nname: {w['id']}\ndescription: {yq(w.get('description', ''))}\n---\n{gen('workflows/' + w['id'] + '.md')}\n\n{wf_body(w)}"
+        blocks["CLAUDE.md"] = guide(lambda r: f"subagent `{r['id']}`", lambda w: f"`/{w['id']}`")
+    elif tool == "claude-app":
+        base = "claude-project"
+        files[f"{base}/INSTRUCTIONS.md"] = f"""# Paste this into your Claude Project's instructions
+
+You are the **Team Lead** of an AI software team working with me (the human owner) inside this chat. You can play every role in the
+team in turn. The role descriptions, workflows and rules are in the project knowledge files: `roles.md`, `workflows.md`, `protocol.md`,
+`archetypes.md`, `capabilities.md`.
+
+How to work:
+1. When I start (or say `/start`), run the **start** workflow from `workflows.md`. Ask me at most a few questions at a time, each with a default.
+2. Work **one role at a time**. Announce `Acting as: <role>`, follow that role's section in `roles.md`, and finish with the handoff block from `protocol.md`.
+3. For anything that reviews (pr-reviewer, principal-engineer, release-gatekeeper, qa-engineer): say you are switching to a *reviewer* and review only what is on the page (spec + code), as if you had not written it. Be strict. For real independence, I may open a new chat and paste the artifact.
+4. Keep a short **STATUS** block at the end of each reply: phase, done, next, what I need to do.
+5. Produce files as separate code blocks with their paths so I can save them into the repo. You cannot run code or tests here; say so, and give me the exact commands to run. For hands-on repo work with tests and PRs, use Claude Code (desktop, terminal, web or the Claude app's code sessions) with the `claude-code` export.
+6. Audience level is **{cfg.get('experience', 'beginner')}**: {EXPERIENCE.get(cfg.get('experience', 'beginner'), EXPERIENCE['beginner'])}
+7. {RULES.splitlines()[1][3:]} Never lower quality gates; I merge and release.
+
+Team: {', '.join(t['name'] for t in teams)}. Software type: {', '.join(A) or 'not chosen yet - run discover'}.
+
+{hats_text('claude-app')}
+"""
+        files[f"{base}/knowledge/roles.md"] = "# Roles\n\n" + "\n\n---\n\n".join(eff[r["id"]] for r in roster)
+        files[f"{base}/knowledge/workflows.md"] = "# Workflows\n\n" + "\n\n---\n\n".join(f"## {w['id']}\n\n{wf_body(w)}" for w in wfs)
+        files[f"{base}/knowledge/protocol.md"] = ctx["protocol"]
+        files[f"{base}/knowledge/archetypes.md"] = "# Software-type profiles\n\n" + "\n\n---\n\n".join(a.read_text() for a in ctx["arch_files"]) if ctx["arch_files"] else "# Software-type profiles\n\nNone chosen yet - run discover.\n"
+        files[f"{base}/knowledge/capabilities.md"] = "# Capabilities\n\n" + "\n\n---\n\n".join(c.read_text() for c in ctx["cap_files"])
+    elif tool == "cursor":
+        files[".cursor/rules/autocraft-team.mdc"] = f"---\ndescription: {yq('The AI agent team for this project: roles, workflows and rules')}\nalwaysApply: true\n---\n{gen('team guide')}\n\n" + guide(lambda r: f"rule `role-{r['id']}` (@-mention it)", lambda w: f"rule `workflow-{w['id']}`")
+        for r in roster:
+            files[f".cursor/rules/role-{r['id']}.mdc"] = f"---\ndescription: {yq(r.get('description', ''))}\nalwaysApply: false\n---\n{gen('roles/' + r['id'] + '.md')}\n\n{eff[r['id']]}"
+        for w in wfs:
+            files[f".cursor/rules/workflow-{w['id']}.mdc"] = f"---\ndescription: {yq(w.get('description', ''))}\nalwaysApply: false\n---\n{gen('workflows/' + w['id'] + '.md')}\n\n{wf_body(w)}"
+    elif tool == "copilot":
+        for r in roster:
+            tl = []
+            for a in as_list(r.get("abilities")):
+                tl += {"read": ["read"], "search": ["search"], "write": ["edit"], "edit": ["edit"], "shell": ["execute"]}.get(a, [])
+            tl = list(dict.fromkeys(tl))
+            files[f".github/agents/{r['id']}.agent.md"] = (f"---\nname: {r['id']}\ndescription: {yq(r.get('description', ''))}\n"
+                                                           f"tools: [{', '.join(yq(t) for t in tl)}]\n---\n{gen('roles/' + r['id'] + '.md')}\n\n{eff[r['id']]}")
+        for w in wfs:
+            files[f".github/prompts/{w['id']}.prompt.md"] = f"---\nmode: agent\ndescription: {yq(w.get('description', ''))}\n---\n{gen('workflows/' + w['id'] + '.md')}\n\n{wf_body(w)}"
+        blocks[".github/copilot-instructions.md"] = guide(lambda r: f"custom agent `{r['id']}` (agent picker)", lambda w: f"prompt `/{w['id']}`")
+    elif tool == "gemini-cli":
+        blocks["GEMINI.md"] = guide(lambda r: f"read `.autocraft/roles/{r['id']}.md`", lambda w: f"`/{w['id']}` or `.autocraft/workflows/{w['id']}.md`")
+        for w in wfs:
+            files[f".gemini/commands/{w['id']}.toml"] = (f"# Generated by autocraft from workflows/{w['id']}.md - customize in .autocraft/custom/ and run `autocraft sync`.\n"
+                                                          f"description = {yq(first_sentence(w.get('description', ''), 200))}\nprompt = {toml_prompt(wf_body(w) + chr(10) + 'User input: {{args}}')}\n")
+    elif tool == "windsurf":
+        files[".windsurf/rules/autocraft-team.md"] = f"---\ntrigger: always_on\ndescription: {yq('Project AI agent team')}\n---\n{gen('team guide')}\n\n" + guide(lambda r: f"rule `role-{r['id']}`", lambda w: f"rule `workflow-{w['id']}` (invoke manually)")
+        for r in roster:
+            files[f".windsurf/rules/role-{r['id']}.md"] = f"---\ntrigger: model_decision\ndescription: {yq(r.get('description', ''))}\n---\n{gen('roles/' + r['id'] + '.md')}\n\n{eff[r['id']]}"
+        for w in wfs:
+            files[f".windsurf/rules/workflow-{w['id']}.md"] = f"---\ntrigger: manual\ndescription: {yq(w.get('description', ''))}\n---\n{gen('workflows/' + w['id'] + '.md')}\n\n{wf_body(w)}"
+    elif tool == "cline":
+        files[".clinerules/autocraft-team.md"] = gen("team guide") + "\n\n" + guide(lambda r: f"read `.autocraft/roles/{r['id']}.md`", lambda w: f"read `.autocraft/workflows/{w['id']}.md`")
+    elif tool == "agents-md":
+        blocks["AGENTS.md"] = guide(lambda r: f"read `.autocraft/roles/{r['id']}.md`", lambda w: f"read `.autocraft/workflows/{w['id']}.md`")
+    elif tool == "prompts":
+        files["prompts/00-team-lead.md"] = (f"# Team Lead prompt\n\nPaste this first, then paste (or attach) the role file you need.\n\n" + guide(lambda r: f"`prompts/{r['id']}.md`", lambda w: f"`prompts/workflows/{w['id']}.md`"))
+        for r in roster:
+            files[f"prompts/{r['id']}.md"] = eff[r["id"]]
+        for w in wfs:
+            files[f"prompts/workflows/{w['id']}.md"] = wf_body(w)
+    else:
+        raise SystemExit(f"error: unknown tool '{tool}'. Known: {', '.join(TOOLS)}")
+    if tool in NEEDS_NEUTRAL_COPIES:
+        for r in roster:
+            files[f".autocraft/roles/{r['id']}.md"] = f"{gen('roles/' + r['id'] + '.md')}\n\n{eff[r['id']]}"
+        for w in wfs:
+            files[f".autocraft/workflows/{w['id']}.md"] = f"{gen('workflows/' + w['id'] + '.md')}\n\n{wf_body(w)}"
+    return files, blocks
+
+
+HOWTO = {
+    "claude-code": "Open this folder in Claude Code (`claude`) or start a Claude app / web Code session on this repo, then type  /kickoff  (you already have product docs)  /start  (new idea)  /build-my-team  /status. Ask for a role by name: \"use the architect subagent\". In Claude Code on the web or the Claude app, select this repo for the session - the same files load.",
+    "claude-app": "In claude.ai create a Project, paste claude-project/INSTRUCTIONS.md into its instructions, upload claude-project/knowledge/*.md, then say: \"Let's start\". (For repo work with tests and PRs use Claude Code instead.)",
+    "cursor": "Open the folder in Cursor. Rules in .cursor/rules attach by description; @-mention a role (e.g. @role-architect) or a workflow (@workflow-start). Open a NEW chat for reviewers.",
+    "copilot": "In VS Code / GitHub, open Copilot chat and pick a custom agent (e.g. architect) from the agent picker; run prompts with /start etc. Reviews should happen in a separate chat.",
+    "gemini-cli": "Run `gemini` in this folder. GEMINI.md loads automatically; start with  /start  or ask: \"Act as the requirements-analyst (see .autocraft/roles).\" Use a new session for reviewers.",
+    "windsurf": "Open the folder in Windsurf. Rules attach automatically; run a workflow by mentioning it (@workflow-start). Use a new Cascade session for reviewers.",
+    "cline": "Open the folder in VS Code with Cline. .clinerules loads automatically; say: \"Follow the autocraft team guide: start the start workflow.\"",
+    "agents-md": "AGENTS.md is read by Codex, Jules, Aider (--read AGENTS.md), Zed, Cursor, Copilot and others. Say: \"Follow AGENTS.md: act as the requirements-analyst and run the start workflow.\"",
+    "prompts": "Open any AI chat. Paste prompts/00-team-lead.md, then the role or workflow file you need from prompts/.",
+}
+
+
+# ----------------------------------------------------------------------------- writing
+def copy_tree(src, dst, ignore=None):
+    if dst.exists():
+        shutil.rmtree(dst)
+    shutil.copytree(src, dst, ignore=shutil.ignore_patterns(*(ignore or [])))
+
+
+def vendor_framework(proj):
+    dst = proj / ".autocraft" / "framework"
+    if FW.resolve() == dst.resolve():
+        return
+    dst.mkdir(parents=True, exist_ok=True)
+    for sub in ("bin", "roles", "teams", "workflows", "archetypes", "capabilities", "templates"):
+        copy_tree(FW / sub, dst / sub, ["__pycache__"])
+    (dst / "docs").mkdir(exist_ok=True)
+    shutil.copy2(FW / "docs" / "protocol.md", dst / "docs" / "protocol.md")
+    (dst / "scripts").mkdir(exist_ok=True)
+    shutil.copy2(FW / "scripts" / "onboard-repo.sh", dst / "scripts" / "onboard-repo.sh")
+    os.chmod(dst / "bin" / "autocraft", 0o755)
+
+
+def write_managed(path, block):
+    body = f"{BEGIN}\n{block.rstrip()}\n{END}\n"
+    if path.exists():
+        cur = path.read_text()
+        if BEGIN in cur and END in cur:
+            new = re.sub(re.escape(BEGIN) + r".*?" + re.escape(END) + r"\n?", lambda m: body, cur, flags=re.S)
+        else:
+            new = cur.rstrip("\n") + "\n\n" + body
+    else:
+        new = body
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(new)
+
+
+def build(proj, dry=False):
+    cfg = read_config(proj)
+    cfg["_proj"] = str(proj)
+    roster, workflows, teams = resolve_roster(cfg, proj)
+    arch, caps = catalog()
+    archetypes = as_list(cfg.get("archetypes"))
+    for a in archetypes:
+        if a not in arch:
+            raise SystemExit(f"error: unknown archetype '{a}'. Known: {', '.join(arch)}")
+    capabilities = list(dict.fromkeys(ALWAYS_ON_CAPS + as_list(cfg.get("capabilities"))))
+    for c in capabilities:
+        if c not in caps:
+            raise SystemExit(f"error: unknown capability '{c}'. Known: {', '.join(caps)}")
+    tools = [TOOL_ALIASES.get(t, t) for t in (as_list(cfg.get("tools")) or ["claude-code"])]
+    team_names = [t["name"] for t in teams]
+    eff = {r["id"]: effective_body(r, cfg, proj, roster, archetypes, capabilities, team_names) for r in roster}
+    protocol = (FW / "docs" / "protocol.md").read_text()
+    ctx = {"cfg": cfg, "roster": roster, "workflows": workflows, "teams": teams, "eff": eff, "archetypes": archetypes,
+           "capabilities": capabilities, "protocol": protocol,
+           "arch_files": [arch[a]["path"] for a in archetypes], "cap_files": [caps[c]["path"] for c in capabilities]}
+    files, blocks = {}, {}
+    for t in tools:
+        f, b = export(t, ctx)
+        files.update(f)
+        blocks.update(b)
+    # shared project files
+    files[".autocraft/protocol.md"] = protocol
+    files[".autocraft/archetypes/README.md"] = (FW / "archetypes" / "README.md").read_text()
+    for a in archetypes:
+        files[f".autocraft/archetypes/{a}.md"] = arch[a]["path"].read_text()
+    for c in capabilities:
+        files[f".autocraft/capabilities/{c}.md"] = caps[c]["path"].read_text()
+    summary = {"tools": tools, "roster": [r["id"] for r in roster], "workflows": [w["id"] for w in workflows],
+               "files": sorted(files) + sorted(blocks)}
+    if dry:
+        return summary
+    # remove stale generated files
+    mpath = proj / ".autocraft" / "manifest.json"
+    old = json.loads(mpath.read_text()) if mpath.exists() else {}
+    warnings = []
+    for rel, h in old.items():
+        if rel not in files and (proj / rel).exists():
+            if sha((proj / rel).read_text()) == h:
+                (proj / rel).unlink()
+                parent = (proj / rel).parent
+                try:
+                    while parent != proj and not any(parent.iterdir()):
+                        parent.rmdir()
+                        parent = parent.parent
+                except OSError:
+                    pass
+            else:
+                warnings.append(f"kept {rel} (stale but modified by hand)")
+    manifest = {}
+    for rel, text in files.items():
+        p = proj / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if p.exists() and rel in old and sha(p.read_text()) != old[rel] and p.read_text() != text:
+            warnings.append(f"overwrote hand edits in {rel} (customize via .autocraft/custom/ instead)")
+        p.write_text(text)
+        manifest[rel] = sha(text)
+    for rel, block in blocks.items():
+        write_managed(proj / rel, block)
+    vendor_framework(proj)
+    cdir = proj / ".autocraft" / "custom"
+    (cdir / "roles").mkdir(parents=True, exist_ok=True)
+    if not (cdir / "README.md").exists():
+        (cdir / "README.md").write_text(CUSTOM_README)
+    if not (cdir / "team-rules.md").exists():
+        (cdir / "team-rules.md").write_text("<!-- Rules every role must follow in THIS project (style, frameworks, company standards). Then run: autocraft sync -->\n")
+    shutil.copytree(FW / "templates", proj / ".autocraft" / "templates", dirs_exist_ok=True)
+    for d in ("docs/specs", "docs/architecture/reviews", "docs/adr"):
+        (proj / d).mkdir(parents=True, exist_ok=True)
+        if not any((proj / d).iterdir()):
+            (proj / d / ".gitkeep").write_text("")
+    if not (proj / "docs" / "architecture" / "status.md").exists():
+        shutil.copy2(FW / "templates" / "architecture" / "status.md", proj / "docs" / "architecture" / "status.md")
+    if "claude-code" in tools:
+        sp = proj / ".claude" / "settings.json"
+        if not sp.exists():
+            sp.write_text(json.dumps({"permissions": {"allow": SAFE_COMMANDS}}, indent=2) + "\n")
+            warnings.append("wrote .claude/settings.json pre-approving routine commands (git, tests, autocraft); edit it to taste, sync never overwrites it")
+    mpath.write_text(json.dumps(manifest, indent=1, sort_keys=True))
+    summary["warnings"] = warnings
+    return summary
+
+
+CUSTOM_README = """# Customizing your agent team
+
+Edit things here, then run `python3 .autocraft/framework/bin/autocraft sync`. Never edit generated files directly.
+
+- `team-rules.md` - rules for ALL roles in this project.
+- `roles/<id>.append.md` - extra rules for one role (appended).
+- `roles/<id>.md` - a full replacement (or a brand-new role; create with `autocraft new-role <id>`).
+- `workflows/<id>.md` - extra or replacement workflows.
+- `../config.yml` - team, roles_add / roles_remove, tools, archetypes, capabilities, experience, limits.
+"""
+
+
+# ----------------------------------------------------------------------------- github module
+def install_github(proj, lang):
+    if lang not in LANGS:
+        raise SystemExit(f"error: --lang must be one of: {', '.join(LANGS)}")
+    cq, eco = LANGS[lang]
+    g, out = FW / "templates" / "github", proj / ".github"
+    added = []
+
+    def copy_new(src, dst):
+        if dst.exists():
+            return
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        added.append(str(dst.relative_to(proj)))
+
+    for name in ("pull_request_template.md", "CODEOWNERS", "SECURITY.md", "dependabot.yml"):
+        copy_new(g / name, out / name)
+    copy_new(g / "ISSUE_TEMPLATE" / "task.md", out / "ISSUE_TEMPLATE" / "task.md")
+    copy_new(g / "ISSUE_TEMPLATE" / "bug.md", out / "ISSUE_TEMPLATE" / "bug.md")
+    copy_new(g / "workflows" / "security-scheduled.yml", out / "workflows" / "security-scheduled.yml")
+    copy_new(g / "workflows" / f"ci-{lang}.yml", out / "workflows" / "ci.yml")
+    if cq and not (out / "workflows" / "codeql.yml").exists():
+        (out / "workflows").mkdir(parents=True, exist_ok=True)
+        (out / "workflows" / "codeql.yml").write_text((g / "workflows" / "codeql.yml").read_text().replace("__CODEQL_LANGUAGE__", cq))
+        added.append(".github/workflows/codeql.yml")
+    dep = out / "dependabot.yml"
+    txt = dep.read_text()
+    txt = re.sub(rf"^  # (- package-ecosystem: {eco}\n)  #   (directory: /\n)  #   (schedule: .*)$", r"  \1    \2    \3", txt, flags=re.M)
+    dep.write_text(txt)
+    if config_path(proj).exists():
+        set_config(proj, {"language": lang})
+    shutil.copytree(FW / "templates", proj / ".autocraft" / "templates", dirs_exist_ok=True)
+    return added
+
+
+# ----------------------------------------------------------------------------- commands
+def cmd_list(a):
+    what = a.what
+    if what == "roles":
+        for r in load_dir("roles").values():
+            print(f"{r['id']:<22} [{r.get('category', '')}] {first_sentence(r.get('description', ''), 100)}")
+    elif what == "teams":
+        for t in load_dir("teams").values():
+            print(f"{t['id']:<14} {t['name']}\n{'':<14} {t['summary']}\n{'':<14} fits: {', '.join(as_list(t.get('fits'))) or '-'}\n{'':<14} roles: {', '.join(as_list(t.get('roles')))}")
+    elif what == "workflows":
+        for w in load_dir("workflows").values():
+            print(f"{w['id']:<20} {first_sentence(w.get('description', ''), 100)}")
+    elif what == "archetypes":
+        for k, v in catalog()[0].items():
+            print(f"{k:<18} {v['summary']}")
+    elif what == "capabilities":
+        for k, v in catalog()[1].items():
+            print(f"{k:<26} triggers: {', '.join(v['triggers'][:6])}")
+    else:
+        for k, v in TOOLS.items():
+            print(f"{k:<12} {v}")
+
+
+def read_files_text(paths):
+    out = []
+    for f in paths or []:
+        p = Path(f)
+        if not p.is_file():
+            raise SystemExit(f"error: file not found: {f}")
+        out.append(p.read_text(errors="replace"))
+    return "\n".join(out)
+
+
+def cmd_recommend(a):
+    r = recommend(" ".join(a.idea) + "\n" + read_files_text(a.file))
+    if a.json:
+        print(json.dumps(r, indent=1))
+        return
+    teams = load_dir("teams")
+    print("Based on your description (a first guess - the `discover` workflow refines it with you):\n")
+    if not r["confident"]:
+        print("  I couldn't tell the kind of software from that. Start with the lean team and run `discover` to talk it through.\n")
+    arch, _ = catalog()
+    for x in r["archetypes"]:
+        print(f"  * {x}: {arch[x]['plain'] or arch[x]['summary']}")
+    if r.get("also_mentioned"):
+        print(f"\n  Also mentioned (check whether they are separate parts): {', '.join(r['also_mentioned'])}")
+    if r["capabilities"]:
+        print(f"\n  Also likely needed: {', '.join(r['capabilities'])}  (always on: {', '.join(r['always_on'])})")
+    if r.get("risk_flags"):
+        print("\n  Design-risk flags found in the text (a keyword scan - read the documents yourself):")
+        for note in r["risk_flags"]:
+            print(f"   - {note}")
+    print(f"\n  LEAN team  -> {r['lean_team']}: {teams['starter']['summary']}")
+    for t in r["full_teams"]:
+        if t != "starter":
+            print(f"  FULL team  -> {t}: {teams[t]['summary']}")
+    arch_arg = ",".join(r["archetypes"])
+    team_arg = ",".join(r["full_teams"])
+    print(f"\n  Install the full team:  autocraft init . --team {team_arg}" + (f" --archetype {arch_arg}" if arch_arg else "") + " --tool <your-tool>")
+    print(f"  or the lean team:       autocraft init . --team starter" + (f" --archetype {arch_arg}" if arch_arg else "") + " --tool <your-tool>")
+    print(f"  tools: {', '.join(TOOLS)}")
+
+
+def split(v):
+    return [x.strip() for x in v.split(",") if x.strip()] if v else None
+
+
+def cmd_init(a):
+    proj = Path(a.dir).resolve()
+    proj.mkdir(parents=True, exist_ok=True)
+    cfg = read_config(proj)
+    upd = {}
+    if a.tool:
+        upd["tools"] = [TOOL_ALIASES.get(t, t) for t in split(a.tool)]
+    elif not cfg.get("tools"):
+        upd["tools"] = ["claude-code"]
+    for t in upd.get("tools", []):
+        if t not in TOOLS:
+            raise SystemExit(f"error: unknown tool '{t}'. Known: {', '.join(TOOLS)}")
+    if a.archetype:
+        upd["archetypes"] = split(a.archetype)
+    if a.capability:
+        upd["capabilities"] = [c for c in split(a.capability) if c not in ALWAYS_ON_CAPS]
+    if a.team:
+        upd["team"] = split(a.team)
+    elif not cfg.get("team"):
+        arche = upd.get("archetypes") or as_list(cfg.get("archetypes"))
+        upd["team"] = (cover_teams(arche, load_dir("teams")) or ["starter"]) if arche else ["starter"]
+    if a.experience:
+        upd["experience"] = a.experience
+    if a.autonomy:
+        upd["autonomy_level"] = a.autonomy
+    if a.owner:
+        upd["human_owner"] = a.owner
+    if a.role_model:
+        upd["role_models"] = list(dict.fromkeys(as_list(cfg.get("role_models")) + split(a.role_model)))
+    if a.sources:
+        upd["sources"] = split(a.sources)
+    if a.git_mode:
+        upd["git_mode"] = a.git_mode
+    if a.add_role:
+        upd["roles_add"] = list(dict.fromkeys(as_list(cfg.get("roles_add")) + split(a.add_role)))
+    if a.remove_role:
+        upd["roles_remove"] = list(dict.fromkeys(as_list(cfg.get("roles_remove")) + split(a.remove_role)))
+    if a.dry_run:
+        tmp = proj / ".autocraft" / "config.yml"
+        had = tmp.exists()
+        old = tmp.read_text() if had else None
+        set_config(proj, upd)
+        try:
+            s = build(proj, dry=True)
+        finally:
+            if had:
+                tmp.write_text(old)
+            else:
+                tmp.unlink()
+                try:
+                    tmp.parent.rmdir()
+                except OSError:
+                    pass
+        print("DRY RUN - would create/update:\n  " + "\n  ".join(s["files"]))
+        print(f"\nRoles: {', '.join(s['roster'])}\nWorkflows: {', '.join(s['workflows'])}")
+        return
+    set_config(proj, upd)
+    s = build(proj)
+    if a.lang:
+        added = install_github(proj, a.lang)
+        print(f"GitHub module: added {len(added)} files (CI, scanning, templates) for {a.lang}")
+    report(proj, s)
+
+
+def report(proj, s):
+    print(f"autocraft: team installed in {proj}")
+    print(f"  tools    : {', '.join(s['tools'])}")
+    print(f"  roles    : {', '.join(s['roster'])}")
+    print(f"  workflows: {', '.join(s['workflows'])}")
+    for w in s.get("warnings", []):
+        print(f"  note: {w}")
+    print("\nHow to start:")
+    for t in s["tools"]:
+        print(f"  [{t}] {HOWTO[t]}")
+    print("\nCustomize any time:  python3 .autocraft/framework/bin/autocraft add-role <id> | remove-role <id> | new-role <id> | sync | doctor")
+
+
+def cmd_pointer(a):
+    proj = Path(a.dir).resolve()
+    proj.mkdir(parents=True, exist_ok=True)
+    srcs = split(a.sources) or []
+    lst = ", ".join(f"`{x}`" for x in srcs) if srcs else "(none listed - ask the owner which files describe the product)"
+    arg = ",".join(srcs)
+    text = (FW / "templates" / "kickoff" / "CLAUDE.pointer.md").read_text().replace("{SOURCES_LIST}", lst).replace("{SOURCES_ARG}", arg)
+    if a.print_only:
+        print(text)
+        return
+    write_managed(proj / "CLAUDE.md", text)
+    print(f"wrote the autocraft pointer into {proj / 'CLAUDE.md'} (replaced automatically by the full team guide after `autocraft init`)")
+
+
+def cmd_board(a):
+    """Install the agent-agnostic task board (work/, scripts/board.py, AGENTS.md), or run it."""
+    proj = Path(a.dir).resolve()
+    src = FW / "templates" / "board"
+    if a.action == "init":
+        (proj / "scripts").mkdir(parents=True, exist_ok=True)
+        (proj / "work" / "tasks").mkdir(parents=True, exist_ok=True)
+        (proj / "work" / "status").mkdir(parents=True, exist_ok=True)
+        copies = [("board.py", "scripts/board.py"), ("AGENTS.md", "AGENTS.md"), ("README.md", "work/README.md"),
+                  ("CONTEXT.md", "work/CONTEXT.md"), ("LESSONS.md", "work/LESSONS.md")]
+        for name, dest in copies:
+            d = proj / dest
+            if d.exists() and name not in ("board.py",):
+                print(f"kept existing {dest}")
+                continue
+            d.write_text((src / name).read_text())
+        (proj / "scripts" / "board.py").chmod(0o755)
+        cfg = proj / "work" / "config.json"
+        if not cfg.exists():
+            cfg.write_text(json.dumps({"integration_branch": a.branch, "lease_hours": 6}, indent=2) + "\n")
+        print(f"board installed in {proj}. Next: python3 scripts/board.py import-tasks <tasks.md>  (cards from '### T01 [kind] Title' headings), then `render`.")
+        return
+    import subprocess
+    raise SystemExit(subprocess.call([sys.executable, str(proj / "scripts" / "board.py"), *a.rest], cwd=proj))
+
+
+def cmd_sync(a):
+    proj = Path(a.dir).resolve()
+    if not config_path(proj).exists():
+        raise SystemExit("error: no .autocraft/config.yml here. Run `autocraft init` first.")
+    report(proj, build(proj))
+
+
+def edit_list(a, key, add, item, cast=lambda x: x):
+    proj = Path(a.dir).resolve()
+    cfg = read_config(proj)
+    cur = as_list(cfg.get(key))
+    item = cast(item)
+    cur = list(dict.fromkeys(cur + [item])) if add else [x for x in cur if x != item]
+    set_config(proj, {key: cur})
+    return proj
+
+
+def cmd_role(a, add):
+    proj = Path(a.dir).resolve()
+    if add:
+        known = set(load_dir("roles")) | {f.stem for f in (proj / ".autocraft" / "custom" / "roles").glob("*.md") if not f.name.endswith(".append.md")}
+        if a.id not in known:
+            raise SystemExit(f"error: unknown role '{a.id}'. Known: {', '.join(sorted(known))}")
+    cfg = read_config(proj)
+    ra, rr = as_list(cfg.get("roles_add")), as_list(cfg.get("roles_remove"))
+    if add:
+        ra = list(dict.fromkeys(ra + [a.id]))
+        rr = [x for x in rr if x != a.id]
+    else:
+        rr = list(dict.fromkeys(rr + [a.id]))
+        ra = [x for x in ra if x != a.id]
+    set_config(proj, {"roles_add": ra, "roles_remove": rr})
+    report(proj, build(proj))
+
+
+def cmd_tool(a, add):
+    t = TOOL_ALIASES.get(a.id, a.id)
+    if t not in TOOLS:
+        raise SystemExit(f"error: unknown tool '{a.id}'. Known: {', '.join(TOOLS)}")
+    proj = edit_list(a, "tools", add, t)
+    report(proj, build(proj))
+
+
+def cmd_new_role(a):
+    proj = Path(a.dir).resolve()
+    p = proj / ".autocraft" / "custom" / "roles" / f"{a.id}.md"
+    if p.exists():
+        raise SystemExit(f"{p} already exists")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(f"""---
+id: {a.id}
+title: {a.id.replace('-', ' ').title()}
+category: build
+abilities: [read, search, write, edit, shell]
+# model: inherit        # optional (Claude Code): opus | sonnet | haiku | a full model id
+description: One sentence saying WHEN to use this role and what it produces.
+---
+
+# {a.id.replace('-', ' ').title()}
+
+You are the **{a.id.replace('-', ' ').title()}**. State your mission in two sentences.
+
+## Inputs
+- What you read before starting.
+
+## What you produce
+- Files / PR comments / decisions, and where they go.
+
+## Checklist
+- What "good" looks like for this role.
+
+## Rules
+- What you must never do (never merge; never skip tests; ...).
+
+End with a handoff block (see `.autocraft/protocol.md`).
+""")
+    print(f"created {p}\nNext: edit it, then:  autocraft add-role {a.id}")
+
+
+def cmd_github(a):
+    proj = Path(a.dir).resolve()
+    added = install_github(proj, a.lang)
+    print("added:\n  " + "\n  ".join(added) if added else "nothing to add (files already exist)")
+
+
+def cmd_doctor(a):
+    proj = Path(a.dir).resolve()
+    problems, notes = [], []
+    if not config_path(proj).exists():
+        raise SystemExit("not an autocraft project: no .autocraft/config.yml")
+    cfg = read_config(proj)
+    cfg["_proj"] = str(proj)
+    try:
+        roster, workflows, teams = resolve_roster(cfg, proj)
+        arch, caps = catalog()
+        for x in as_list(cfg.get("archetypes")):
+            if x not in arch:
+                problems.append(f"unknown archetype {x}")
+        for x in as_list(cfg.get("capabilities")):
+            if x not in caps:
+                problems.append(f"unknown capability {x}")
+        for t in as_list(cfg.get("tools")):
+            if TOOL_ALIASES.get(t, t) not in TOOLS:
+                problems.append(f"unknown tool {t}")
+        ids = [r["id"] for r in roster]
+        meta_only = [t["id"] for t in teams] == ["setup"]  # the meta team only builds other teams
+        if meta_only:
+            pass
+        elif "pr-reviewer" not in ids and "qa-engineer" not in ids:
+            problems.append("no independent reviewer in the team (pr-reviewer or qa-engineer) - risky")
+        if not meta_only and not any(r["id"] in ("developer", "backend-developer", "frontend-developer", "mobile-developer", "data-engineer", "ml-engineer",
+                               "ai-engineer", "devops-engineer", "embedded-engineer", "game-developer") for r in roster):
+            problems.append("no builder role in the team")
+        if not cfg.get("human_owner") and not meta_only:
+            notes.append("human_owner is not set: use `autocraft init . --owner <github-handle>` so release-ready notifications and CODEOWNERS know who you are")
+        for src in as_list(cfg.get("sources")):
+            if not (proj / src).exists():
+                problems.append(f"source document listed in config does not exist: {src}")
+        if not as_list(cfg.get("archetypes")) and not meta_only:
+            notes.append("archetypes not set yet - run the `discover` workflow")
+        m = proj / ".autocraft" / "manifest.json"
+        if m.exists():
+            for rel, h in json.loads(m.read_text()).items():
+                p = proj / rel
+                if not p.exists():
+                    problems.append(f"generated file missing: {rel} (run autocraft sync)")
+                elif sha(p.read_text()) != h:
+                    notes.append(f"{rel} was edited by hand - sync will overwrite it; move edits to .autocraft/custom/")
+        else:
+            problems.append("no manifest: run autocraft sync")
+        print(f"roles ({len(ids)}): {', '.join(ids)}")
+    except SystemExit as e:
+        problems.append(str(e))
+    for n in notes:
+        print(f"note: {n}")
+    for p in problems:
+        print(f"PROBLEM: {p}")
+    if not problems:
+        print("doctor: OK")
+    sys.exit(1 if problems else 0)
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="autocraft", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sp = ap.add_subparsers(dest="cmd", required=True)
+    p = sp.add_parser("list"); p.add_argument("what", choices=["roles", "teams", "workflows", "archetypes", "capabilities", "tools"]); p.set_defaults(f=cmd_list)
+    p = sp.add_parser("recommend"); p.add_argument("idea", nargs="*", default=[]); p.add_argument("--file", action="append", help="also read this document (repeatable)")
+    p.add_argument("--json", action="store_true"); p.set_defaults(f=cmd_recommend)
+    p = sp.add_parser("pointer", help="write a small CLAUDE.md pointer so an AI session in this repo can kick the project off with autocraft")
+    p.add_argument("dir", nargs="?", default="."); p.add_argument("--sources", help="comma-separated owner documents, e.g. docs/product-concept.md,docs/technical-plan.md")
+    p.add_argument("--print", dest="print_only", action="store_true"); p.set_defaults(f=cmd_pointer)
+    p = sp.add_parser("init")
+    p.add_argument("dir", nargs="?", default=".")
+    p.add_argument("--tool"); p.add_argument("--team"); p.add_argument("--archetype"); p.add_argument("--capability")
+    p.add_argument("--experience", choices=list(EXPERIENCE)); p.add_argument("--autonomy", type=int, choices=[1, 2, 3])
+    p.add_argument("--sources", help="owner documents the team treats as authoritative inputs (comma-separated paths)")
+    p.add_argument("--git-mode", choices=list(GIT_MODES), help="session-branch (default) or pr-per-task")
+    p.add_argument("--role-model", help="Claude Code only: per-role model, e.g. pr-reviewer=sonnet,qa-engineer=haiku (default: inherit the session's model)")
+    p.add_argument("--owner", help="the owner's GitHub handle (notifications target, CODEOWNERS)")
+    p.add_argument("--add-role"); p.add_argument("--remove-role"); p.add_argument("--lang", help="also install CI/security/GitHub files: " + ", ".join(LANGS))
+    p.add_argument("--dry-run", action="store_true"); p.set_defaults(f=cmd_init)
+    p = sp.add_parser("board", help="agent-agnostic task board: `board init [dir]` installs it; other args pass through to scripts/board.py")
+    p.add_argument("action", choices=["init", "run"]); p.add_argument("dir", nargs="?", default="."); p.add_argument("--branch", default="main"); p.add_argument("rest", nargs="*"); p.set_defaults(f=cmd_board)
+    p = sp.add_parser("sync"); p.add_argument("dir", nargs="?", default="."); p.set_defaults(f=cmd_sync)
+    for name, add in (("add-role", True), ("remove-role", False)):
+        p = sp.add_parser(name); p.add_argument("id"); p.add_argument("dir", nargs="?", default="."); p.set_defaults(f=lambda a, add=add: cmd_role(a, add))
+    for name, add in (("add-tool", True), ("remove-tool", False)):
+        p = sp.add_parser(name); p.add_argument("id"); p.add_argument("dir", nargs="?", default="."); p.set_defaults(f=lambda a, add=add: cmd_tool(a, add))
+    p = sp.add_parser("new-role"); p.add_argument("id"); p.add_argument("dir", nargs="?", default="."); p.set_defaults(f=cmd_new_role)
+    p = sp.add_parser("github"); p.add_argument("dir", nargs="?", default="."); p.add_argument("--lang", required=True, choices=list(LANGS)); p.set_defaults(f=cmd_github)
+    p = sp.add_parser("doctor"); p.add_argument("dir", nargs="?", default="."); p.set_defaults(f=cmd_doctor)
+    a = ap.parse_args()
+    a.f(a)
+
+
+if __name__ == "__main__":
+    main()

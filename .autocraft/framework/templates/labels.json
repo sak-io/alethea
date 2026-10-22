@@ -1,0 +1,10 @@
+[
+  {"name": "agent:ready",             "color": "0e8a16", "description": "Task is ready for a developer agent"},
+  {"name": "agent:in-progress",       "color": "1d76db", "description": "A developer agent is working on it"},
+  {"name": "agent:needs-review",      "color": "fbca04", "description": "Waiting for pr-reviewer"},
+  {"name": "agent:changes-requested", "color": "d93f0b", "description": "Feedback must be addressed by the developer"},
+  {"name": "agent:approved",          "color": "5319e7", "description": "pr-reviewer approved; awaiting pre-release check"},
+  {"name": "agent:release-ready",     "color": "0e8a16", "description": "Pre-release check passed; waiting for human merge"},
+  {"name": "needs-human",             "color": "b60205", "description": "Agents are stuck or a human decision is needed"},
+  {"name": "security",                "color": "ee0701", "description": "Security finding or fix"}
+]

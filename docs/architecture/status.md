@@ -1,0 +1,26 @@
+Status: IN REVIEW (PR #1 whole-branch review; fixes on branch `pr1-fixes`, awaiting re-review and the owner's merge)
+Round: 1 (whole-PR)
+Last review: PR #1 whole-branch review (findings addressed below)
+Updated: 2026-10-21
+
+## Core complete (through T21)
+Built: cortex (SQLite+FTS5), hashed n-gram vectors, encode gate and dedup, recall with spreading activation, relevance floor, same-repo boost and `scope`, activation/decay, consolidation and sleep cycle, redaction, daemon (Unix + token-authed TCP), fail-soft client, MCP server (stdio), `mnemo` CLI, briefing.
+Tests: default suite 437 tests (4 skipped: opt-in `ENGRAM_SLOW_TESTS`, `ENGRAM_PERF`), ~40-48 s. Includes `scripts/test_e2e.py` (real daemon process), `scripts/test_concurrency.py` (now via `tests/test_concurrency_wrapper.py`, ~9 s), `tests/test_recall_regression.py`, `tests/test_portability.py`, `tests/test_bench_write.py`.
+Recall corpus (80 memories incl. 20 distractors, 43 cues): recall@3 0.953, top-1 0.884; untuned held-out (30 cues) 0.833; 0 of 19 off-topic/nonsense cues return anything; gates 0.93 / 0.85 / 0.80.
+
+## PR #1 review follow-ups (this branch)
+Done: honest README and `docs/configuration.md` (every `ENGRAM_*`/`MNEMO_*` variable, plaintext-token warning); POSIX-only guard (`fcntl`/`AF_UNIX`) with clean failure on other platforms; reserved-option warning (`ENGRAM_EMBEDDER`, `ENGRAM_LLM_CONSOLIDATE`); cortex refuses a newer `schema_version`; ADRs 0002-0005 accepted; concurrency script in CI discovery; autostart lock/stamp 0600; gitctx caches LRU-bounded (1024); downscale crash semantics documented; ResourceWarnings fixed; CI timeout and no double runs; write cost made bounded (see lessons.md "Write scaling"); per-task review index in `docs/architecture/reviews/index.md`.
+Not done: macOS in the CI matrix (cannot be verified from this environment; the suite uses only POSIX features so it should work, but untested).
+
+## T24 export-rules (branch t24)
+`engram/export.py`, daemon verb `export_rules` (render-only: rejects path/target/dir params, validates repo_root, no file writes), `mnemo export-rules [--target] [--if-changed]`, SessionEnd detached refresh in the hook (only when an export file already exists), refresh after `mnemo forget`/`sleep`. Writes use dir-fd + O_NOFOLLOW, temp+fsync+rename, header ownership check, `.gitignore` append or warning. `encode()` now stamps `meta.deliberate=True` on deliberate writes (the confidence floor is `access_count >= 2` or that flag). Tests: `tests/test_export.py`.
+
+## Remaining gaps
+- Built: Claude Code hook script (T22) and wiring (T23: `.mcp.json`, `integrations/claude-code/`; the `.claude/settings.json` hooks block was removed in P2b), and `export-rules` sync-back (T24; the CLAUDE.snippet import of `.claude/engram_learned.md` becomes active after the first `mnemo export-rules`). Not built: embedder plugins and `reembed` (T25-T26), LLM distiller (T27), Docker sidecar (T28), Cursor integration (T29), release docs (T31). Installer (T30) is partly built: packaging (`pyproject.toml`, `engram-memory`, entry points `mnemo`/`engram-daemon`/`engram-hook`/`engram-mcp`) and `mnemo install|uninstall claude-code` (P2b, ADR 0009; the repo itself no longer enables hooks). Remaining of T30: Cursor and other hosts, snippet/CLAUDE.md guidance beyond printing, auto-update of recorded interpreter paths, PyPI name confirmation and publishing.
+- No real semantic embedder: sem-only matches are weak, so paraphrases without shared words miss ("which database does the billing service use", "how to roll back a bad release").
+- FTS rank fusion ranks by position, not score.
+- Dedup beyond 2000 rows sees only the 2000 newest rows in the FTS channel plus the 600-row vector window (documented trade-off, lessons.md).
+- Redaction gaps listed in lessons.md.
+- mnemo has no briefing command and MCP has no briefing tool; the MCP server does not autostart the daemon.
+- `ENGRAM_EMBEDDER` and `ENGRAM_LLM_CONSOLIDATE` are reserved (not implemented).
+- Windows/other non-POSIX platforms unsupported by design.

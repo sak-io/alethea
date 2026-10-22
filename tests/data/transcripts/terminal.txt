@@ -1,0 +1,21 @@
+Let me run the test suite and see what is failing.
+=====
+$ python3 -m unittest discover -s tests
+test_a ... ok
+test_b ... ok
+test_c ... ok
+test_d ... ok
+test_e ... ok
+test_f ... ok
+test_g ... ok
+test_h ... ok
+test_i ... ok
+test_j ... ok
+test_k ... ok
+FAIL: test_recall_scope (tests.test_recall.ScopeTest)
+AssertionError: 'a' != 'b' in test_recall_scope
+Ran 11 tests in 0.2s
+=====
+The failure is caused by the repo_root fallback using cwd instead of the git common dir, so worktrees were treated as separate repos.
+=====
+I fixed it by resolving the git common dir and the suite passes now.

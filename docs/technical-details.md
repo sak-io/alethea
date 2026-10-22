@@ -2,6 +2,8 @@
 
 A specification of Engram, written so the project can be built from this document. For the product rationale, see `product-concept.md`.
 
+Every `ENGRAM_*` and `MNEMO_*` environment variable is listed in one table in [configuration.md](configuration.md); where this document names one, that table is authoritative for its default and implementation status.
+
 The numbers below (thresholds, weights, decay rates) are the reference starting values. Verify and tune them with tests.
 
 ---
@@ -36,7 +38,7 @@ engram/
     cursor/mcp.json                MCP registration template
     cursor/engram.mdc              always-apply rule telling Cursor when to recall/remember
   .mcp.json                      registers the `engram` MCP server for Claude Code
-  .claude/settings.json          registers the hook wiring
+  (hook wiring)                  provided by the installed package: `mnemo install claude-code` (ADR 0009)
   Dockerfile, docker-compose.yml sidecar deployment (stdlib-only image, TCP mode)
 ```
 
@@ -258,7 +260,7 @@ A hand-rolled stdio JSON-RPC MCP server with no SDK dependency. It exposes `reca
 
 ### `hooks/engram_hook.py`
 
-The involuntary pathway, wired through `.claude/settings.json` to `SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`, and `PreCompact`.
+The involuntary pathway, wired by the installed package (`mnemo install claude-code`, ADR 0009; this repo does not enable hooks itself) to `SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`, and `PreCompact`.
 
 - `SessionStart` fetches the briefing.
 - Turn events feed `observe()`.

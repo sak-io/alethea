@@ -1,0 +1,22 @@
+{
+ ".autocraft/archetypes/README.md": "ff4b9dd6f1f6ec2af61cace4f50329e910af0e3b908aa93a009467510ec39465",
+ ".autocraft/archetypes/library-cli.md": "d755945ac3be9d2e358775e35b5bba132cc6729d15de32c66a69d12dab6bb37c",
+ ".autocraft/capabilities/analytics-observability.md": "538e16c836ff315a24bdfac058c22ec6647cb0437ab849a54316df41827e78ad",
+ ".autocraft/capabilities/deployment-hosting.md": "7c3d05c860592bcdf335196fbc94dc189c06a3c5b1581df6d18fbe3e16dc2ad2",
+ ".autocraft/capabilities/secrets-and-config.md": "58c7b610ce834ab426edadf6b880146ae4ce34f2ec3f687b962e6bebed8d37e5",
+ ".autocraft/protocol.md": "a9148c2d11969328f7bd5be26071bbe145eadcbee51bf52a9e138a7425891f7a",
+ ".claude/agents/architect.md": "a9b36686982ec95efe1ab0281884b4d3e3fb8e5716a5362c634b4fefad7a783c",
+ ".claude/agents/developer.md": "3e7e62fb00d9d04dee757241a14d767293122a02534a68c24cff8802af71eef4",
+ ".claude/agents/pr-reviewer.md": "efb10f9cb03ad79ee1d6324263ec2bc895056119b4aa7c2257a7d0fc630ad9be",
+ ".claude/agents/qa-engineer.md": "8b41ae10d4a1d9bdf6abd323ab5800e86ee9f4b0e50c78308b8ae204a4b91382",
+ ".claude/agents/requirements-analyst.md": "3be2515b1cd2005970e6fe6fcdfcbec421adc6f3d347c71b2da6ec5d1642c4ea",
+ ".claude/agents/security-auditor.md": "809a102f6d4ca41603516631b5c8e81a8433c342d4fcb239e8ed50211fea6f51",
+ ".claude/skills/build-feature/SKILL.md": "f8892feb375462b651282f60ad9d0627b169ad5b97377aec4896003164c31d27",
+ ".claude/skills/discover/SKILL.md": "25f09315a7befecde12cca93cb78389c43c8980d0a58afeab6a3bf4185485626",
+ ".claude/skills/explain/SKILL.md": "27ae8412a4c42c07fd0d3db8b901668f9efdbf1bd4183f6f2824a204347f9c05",
+ ".claude/skills/kickoff/SKILL.md": "83337c5bd83038e71915859802aae5c3536a02e8973de8dfb78e82f3e53edc01",
+ ".claude/skills/review-pr/SKILL.md": "56aefa9d4e32fc018c4bd39ce911bf0f4c03518e1cff37b3f89da2459871a803",
+ ".claude/skills/security-scan/SKILL.md": "eb7173ebc45f077d02d5b63cd1f3401771d7b6667bd6946fc2e05eae81ae255b",
+ ".claude/skills/start/SKILL.md": "ddb89b4165322a10b994c188c757a124790ed2a2dc552b596dcd1d14d51829b7",
+ ".claude/skills/status/SKILL.md": "2786537f0824ed8cb3102f03e66b565f5fa924b66376469e0b6b084fffc4c073"
+}

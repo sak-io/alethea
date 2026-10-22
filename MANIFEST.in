@@ -1,0 +1,6 @@
+prune tests
+prune scripts
+prune docs
+prune integrations
+prune .github
+global-exclude __pycache__ *.pyc

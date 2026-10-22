@@ -1,0 +1,27 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  pull-requests: write
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  ci:            # <- required status check name; keep as "ci"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
+      - uses: terraform-linters/setup-tflint@v4
+      - run: tflint --recursive
+      - name: Security scan (SAST for infrastructure)
+        run: pip install checkov && checkov -d . --quiet --compact
+      # Plan/apply: configure cloud credentials via OIDC (no long-lived keys), post `terraform plan` on PRs,
+      # and run `apply` only after merge behind a protected environment that requires human approval.

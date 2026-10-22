@@ -1,0 +1,19 @@
+Here is the patch for the retry bug.
+=====
+diff --git a/engram/client.py b/engram/client.py
+index 83db48c..bf2a1e0 100644
+--- a/engram/client.py
++++ b/engram/client.py
+@@ -10,7 +10,7 @@ def call(msg):
+-    retries = 3
++    retries = 5
+     for i in range(retries):
+         try_send(msg)
+-        sleep(1)
++        sleep(2 ** i)
+=====
+We decided to use exponential backoff because the fixed one second sleep hammered the daemon after restarts.
+=====
+Always cap the backoff at 30 seconds so hooks never stall the editor.
+=====
+Looks fine.

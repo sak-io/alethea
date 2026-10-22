@@ -1,0 +1,25 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  ci:            # <- required status check name; keep as "ci"
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with: { channel: stable, cache: true }
+      - run: flutter pub get
+      - run: dart format --output=none --set-exit-if-changed .
+      - run: flutter analyze
+      - run: flutter test --coverage
+      - run: flutter build apk --debug
+      # iOS builds need a macOS runner: add a second job (runs-on: macos-latest) with `flutter build ios --no-codesign`.
+      # Dependency vulnerabilities: Dependabot ('pub' ecosystem) covers SCA; no CodeQL support for Dart.

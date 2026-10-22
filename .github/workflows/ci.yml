@@ -1,0 +1,57 @@
+name: ci
+on:
+  push:
+    branches: [main, "autocraft/**"]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false   # one failing interpreter must not hide the others' results
+      matrix:
+        python-version: ["3.9", "3.11", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python3 -m unittest discover -s tests -t . -v
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Build the wheel
+        run: python -m pip wheel . --no-deps -w "$RUNNER_TEMP/dist"
+      - name: Install into a fresh venv and exercise the entry points (no source tree on the path)
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install "$RUNNER_TEMP"/dist/engram_memory-*.whl
+          export PATH="$RUNNER_TEMP/venv/bin:$PATH"
+          export HOME="$(mktemp -d)" ENGRAM_HOME="$(mktemp -d)" ENGRAM_PORT=1
+          unset CLAUDE_CONFIG_DIR
+          cd "$(mktemp -d)"
+          python -c "import engram; assert 'site-packages' in engram.__file__, engram.__file__"
+          mnemo --help
+          mnemo install claude-code --scope user --dry-run
+          test ! -e "$HOME/.claude"
+          mnemo install claude-code
+          python -c "import json, os; d = json.load(open(os.path.expanduser('~/.claude/settings.json'))); assert set(d['hooks']) == {'SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd', 'PreCompact'}, d"
+          out="$(engram-hook < /dev/null)"
+          test -z "$out"
+          mnemo install claude-code
+          mnemo uninstall claude-code
+          # uninstall deletes a settings file it created (and its empty directory); a pre-existing
+          # file stays and must no longer contain Engram's hooks
+          python -c "import json, os; p = os.path.expanduser('~/.claude/settings.json'); assert (not os.path.exists(p)) or 'hooks' not in json.load(open(p)), p"
