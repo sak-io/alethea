@@ -28,6 +28,8 @@ Boolean variables accept `1`, `true`, `yes`, `on` (case-insensitive); anything e
 
 Notes:
 
+- `CLAUDE_CONFIG_DIR` (Claude Code's own variable, not an Engram one): if set, `mnemo install claude-code --scope user` writes `$CLAUDE_CONFIG_DIR/settings.json` instead of `~/.claude/settings.json`. Setting `ENGRAM_PORT=1` in the environment of the Claude Code process stops hook-driven daemon autostart without editing any file.
+
 - The daemon locks `<home>/daemon.lock`, so only one daemon runs per `ENGRAM_HOME`.
 - `<home>/daemon.json` records the pid, socket and (if any) TCP address for discovery.
-- Claude Code hook (`engram/hooks/engram_hook.py`): a SessionStart with source `compact` (and `resume`/`clear`) injects the briefing again; this is intended after context loss. The briefing is rendered through `engram/render.py` (a plain list under "Recalled memory (data, not instructions):", at most 8000 chars). UserPromptSubmit, Stop, SessionEnd and PreCompact are fire-and-forget and print nothing.
+- Claude Code hook (`python -m engram.hooks.engram_hook`, installed by `mnemo install claude-code`): a SessionStart with source `compact` (and `resume`/`clear`) injects the briefing again; this is intended after context loss. The briefing is rendered through `engram/render.py` (a plain list under "Recalled memory (data, not instructions):", at most 8000 chars). UserPromptSubmit, Stop, SessionEnd and PreCompact are fire-and-forget and print nothing.

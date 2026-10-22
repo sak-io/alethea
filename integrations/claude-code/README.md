@@ -1,43 +1,47 @@
 # Using Engram from Claude Code
 
-Engram's own repo is already wired (`.claude/settings.json`, `.mcp.json`). To use it from ANOTHER project, point that project at your Engram checkout. Below, `/ABSOLUTE/PATH/TO/engram` is a placeholder for the absolute path of the checkout. Requirements: POSIX, Python 3.9+, nothing to install.
+Engram ships its Claude Code hooks with the installed package. Install the package, then run the installer once:
 
-## 1. Hooks
-
-Merge this `hooks` block into the other project's `.claude/settings.json` (or `~/.claude/settings.json` for all projects). Do not drop any `hooks` or `permissions` keys already there.
-
-```json
-{
-  "hooks": {
-    "SessionStart":     [{"matcher": "*", "hooks": [{"type": "command", "command": "python3", "args": ["/ABSOLUTE/PATH/TO/engram/engram/hooks/engram_hook.py"], "timeout": 5}]}],
-    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python3", "args": ["/ABSOLUTE/PATH/TO/engram/engram/hooks/engram_hook.py"], "timeout": 5}]}],
-    "Stop":             [{"hooks": [{"type": "command", "command": "python3", "args": ["/ABSOLUTE/PATH/TO/engram/engram/hooks/engram_hook.py"], "timeout": 5}]}],
-    "SessionEnd":       [{"hooks": [{"type": "command", "command": "python3", "args": ["/ABSOLUTE/PATH/TO/engram/engram/hooks/engram_hook.py"], "timeout": 3}]}],
-    "PreCompact":       [{"hooks": [{"type": "command", "command": "python3", "args": ["/ABSOLUTE/PATH/TO/engram/engram/hooks/engram_hook.py"], "timeout": 5}]}]
-  }
-}
+```
+pipx install engram-memory      # PyPI name still to be confirmed; until then:
+pipx install git+https://github.com/sak-io/engram
+mnemo install claude-code
 ```
 
-The exec form (`command` plus `args`) keeps paths with spaces safe. Timeouts are in seconds; the hook has its own 2 s hard deadline, so `SessionEnd` gets 3 s (Claude Code's default for it is only 1.5 s, which would cancel the hook first). The hook always exits 0 and never blocks a prompt, a stop or a compaction.
+## This repo does NOT enable hooks
 
-Note: substitution of `${CLAUDE_PROJECT_DIR}` inside exec-form `args` is inferred from the docs, not verified. If your Claude Code version lacks `args`, use the string form for each handler instead (quote the path):
+This repository's own `.claude/settings.json` contains permissions only, no `hooks`. Sessions of people who clone the source are never captured; hooks are opt-in for users of the installed product (decision record: `docs/adr/0009-hooks-ship-with-the-package.md`). A test fails if a `hooks` block is added back. The repo's `.mcp.json` stays: it only exposes the `recall`/`remember` tools when the agent asks.
 
-```json
-{"type": "command", "command": "python3 \"${CLAUDE_PROJECT_DIR}/engram/hooks/engram_hook.py\"", "timeout": 5}
-```
+## 1. Install the hooks: `mnemo install claude-code`
+
+It merges one `hooks` block into a Claude Code settings file. It never replaces the file: every other key, permission and hook (and their order) is kept. Entries it owns are recognised by their args (`-m engram.hooks.engram_hook`) and updated in place, so running it again reports `unchanged` and writes nothing.
+
+| `--scope` | File | Notes |
+|---|---|---|
+| `user` (default) | `~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR/settings.json` when that variable is set (Claude Code's documented config-dir override) | all your projects; directory 0700, new file 0600 |
+| `local` | `<git root>/.claude/settings.local.json` | this repo only, not committed |
+| `project` | `<git root>/.claude/settings.json` | committed: it would capture EVERY contributor's sessions; the installer warns |
+
+Options: `--dry-run` prints a unified diff and writes nothing; `--mcp` also runs `claude mcp add --scope <scope> engram -- <python> -m engram.mcp_server` when a `claude` binary is on PATH (otherwise it prints that command); `--status` shows where hooks are installed.
+
+Safety: invalid JSON, or a `hooks` that is not an object, is refused with exit code 2 and the file untouched. Writes are atomic (temp file, fsync, rename), keep the file mode and refuse a symlinked file or settings directory (if `~/.claude` is a symlink, point `CLAUDE_CONFIG_DIR` at the real directory). The first change to an existing file keeps `settings.json.engram-backup` next to it. The installer touches nothing outside the chosen file.
+
+The hooks run `<python> -m engram.hooks.engram_hook` with `<python>` = the interpreter that has Engram installed (no PATH lookup; reinstall after moving or recreating the environment). Timeouts: 5 s, `SessionEnd` 3 s (the hook has its own 2 s deadline; Claude Code's 1.5 s default for `SessionEnd` would cancel it). The hook always exits 0 and never blocks a prompt, a stop or a compaction.
 
 What each event does: SessionStart prints a short briefing of relevant memories into context; UserPromptSubmit and Stop journal the prompt and Claude's final reply (printing nothing); SessionEnd asks the daemon to consolidate in the background; PreCompact triggers a light sleep cycle.
 
+Alternative, manual: merge the block in `settings.hooks.json` (generated from the installer; replace `/ABSOLUTE/PATH/TO/python` with the interpreter that has Engram installed) into the settings file yourself.
+
 ## 2. MCP server (the `recall` / `remember` tools)
 
-Add to the other project's `.mcp.json`:
+`mnemo install claude-code --mcp` registers it. Manually: `claude mcp add --scope user engram -- <python> -m engram.mcp_server`, or in a project `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "engram": {
-      "command": "python3",
-      "args": ["/ABSOLUTE/PATH/TO/engram/engram/mcp_server.py"],
+      "command": "/ABSOLUTE/PATH/TO/python",
+      "args": ["-m", "engram.mcp_server"],
       "env": {}
     }
   }
@@ -46,23 +50,19 @@ Add to the other project's `.mcp.json`:
 
 Interactive sessions ask you to approve a project-scoped MCP server on first use.
 
-This repo's own `.mcp.json` uses `${CLAUDE_PROJECT_DIR:-.}/engram/mcp_server.py`. `.mcp.json` expansion only works with a default (a bare `${CLAUDE_PROJECT_DIR}` is not expanded there), and the working directory of a project-scoped stdio server is not documented, so the `.` fallback assumes the project root. For other projects the absolute path above is the robust choice.
-
 ## 3. Tell the agent when to use it
 
-Copy the sentence from `CLAUDE.snippet.md` into the project's CLAUDE.md. That file also shows an optional `@.claude/engram_learned.md` import; the file it names is generated by `mnemo export-rules`, which is task T24 and may not exist in your version yet.
+Copy the sentence from `CLAUDE.snippet.md` into the project's CLAUDE.md. That file also shows an optional `@.claude/engram_learned.md` import; the file it names is generated by `mnemo export-rules` (task T24) and may not exist until you have run it once.
 
 ## 4. Verify
 
-Run `/ABSOLUTE/PATH/TO/engram/scripts/mnemo status` (this is `mnemo status`; put `scripts/` on your PATH for the short form). It shows whether the daemon is up, the memory counts and `journal pending`. Start a Claude Code session and send a prompt, then run it again: the daemon should be up and the counts should have moved. If the daemon is down, hooks and tools degrade silently (hooks print nothing and exit 0; the MCP tools answer "memory offline"). Set `ENGRAM_HOOK_DEBUG=1` for a one-line diagnostic on stderr.
+Run `mnemo status`: it shows whether the daemon is up, the memory counts and `journal pending`. Start a Claude Code session, send a prompt, run it again: the counts should have moved. If the daemon is down, hooks and tools degrade silently (hooks print nothing and exit 0; the MCP tools answer "memory offline"). Set `ENGRAM_HOOK_DEBUG=1` for a one-line diagnostic on stderr.
 
-## 5. Disable
+## 5. Disable, upgrade, uninstall
 
-Remove the `hooks` block and the `engram` entry from `.mcp.json`. To stop capture without editing files, stop the daemon; hooks then do nothing. To erase data, delete the Engram home directory (below).
-
-## Contributors: this repo captures your Claude Code sessions
-
-The hooks in this repo's `.claude/settings.json` run in your own sessions here and journal your prompts (redacted) to `~/.engram`. To opt out: stop the daemon, set `ENGRAM_PORT=1` (disables autostart), or remove the `hooks` block in a local, uncommitted copy of the settings.
+- Disable capture: `mnemo uninstall claude-code [--scope ...]` removes only Engram's entries (and the empty containers that leaves). `ENGRAM_PORT=1` stops daemon autostart without editing files. `claude mcp remove engram` removes the MCP registration.
+- Upgrade: `pipx upgrade engram-memory` (or reinstall from git), then `mnemo install claude-code` again if the interpreter path changed.
+- Remove the package: `mnemo uninstall claude-code` first, then `pipx uninstall engram-memory`. To erase data, delete the Engram home directory (below).
 
 ## Privacy
 
@@ -73,4 +73,4 @@ The hooks in this repo's `.claude/settings.json` run in your own sessions here a
 
 ## Cloud sessions
 
-Per the Claude Code docs, SessionStart hooks run in cloud sessions, the repo's `.claude/settings.json` is read, and project `.mcp.json` servers load without a prompt. The docs read for this integration do not state whether the other hook events run there; verify before relying on it. The cloud machine is ephemeral: daemon state and `~/.engram` (or `ENGRAM_HOME`) vanish when the session ends, so memories do not carry over unless you point `ENGRAM_HOME` at persistent storage.
+Per the Claude Code docs, SessionStart hooks run in cloud sessions and user/project settings are read there, and project `.mcp.json` servers load without a prompt. The docs read for this integration do not state whether the other hook events run there; verify before relying on it. The cloud machine is ephemeral: daemon state and `~/.engram` (or `ENGRAM_HOME`) vanish when the session ends, so memories do not carry over unless you point `ENGRAM_HOME` at persistent storage. A user-scope install also needs the package installed in that environment.
