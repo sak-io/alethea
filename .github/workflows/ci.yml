@@ -52,4 +52,6 @@ jobs:
           test -z "$out"
           mnemo install claude-code
           mnemo uninstall claude-code
-          python -c "import json, os; d = json.load(open(os.path.expanduser('~/.claude/settings.json'))); assert 'hooks' not in d, d"
+          # uninstall deletes a settings file it created (and its empty directory); a pre-existing
+          # file stays and must no longer contain Engram's hooks
+          python -c "import json, os; p = os.path.expanduser('~/.claude/settings.json'); assert (not os.path.exists(p)) or 'hooks' not in json.load(open(p)), p"
