@@ -62,7 +62,7 @@ Run `mnemo status`: it shows whether the daemon is up, the memory counts and `jo
 
 ## 5. Disable, upgrade, uninstall
 
-- Disable capture: `mnemo uninstall claude-code [--scope ...]` removes only Engram's entries: the event arrays and the `hooks` key are dropped only when they end up empty because of that. If the file then holds just `{}` and no `.engram-backup` exists (the installer created it), the file is deleted, and its directory too if that is empty; otherwise the file stays. `ENGRAM_PORT=1` stops daemon autostart without editing files. `claude mcp remove engram` removes the MCP registration.
+- Disable capture: `mnemo uninstall claude-code [--scope ...]` removes only Engram's entries: the event arrays and the `hooks` key are dropped only when they end up empty because of that. If the file then holds just `{}` and no `.engram-backup` exists (the installer created it), the file is deleted, and its directory too if it is then empty (the installer cannot tell who created an empty directory, so it only ever removes one that is empty); otherwise the file stays. `ENGRAM_PORT=1` stops daemon autostart without editing files. `claude mcp remove engram` removes the MCP registration.
 - Upgrade: `pipx upgrade engram-memory` (or reinstall from git), then `mnemo install claude-code` again if the interpreter path changed.
 - Remove the package: `mnemo uninstall claude-code` first, then `pipx uninstall engram-memory`. To erase data, delete the Engram home directory (below).
 

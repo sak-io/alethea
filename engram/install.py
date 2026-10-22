@@ -364,7 +364,7 @@ def apply(scope, action, dry_run=False, cwd=None, environ=None, python=None):
                   and not _exists(dfd, backup))
         res["deleted"] = delete
         res["diff"] = "".join(difflib.unified_diff(
-            old_text.splitlines(True), "" if delete else new_text.splitlines(True),
+            old_text.splitlines(True), [] if delete else new_text.splitlines(True),
             fromfile=path if raw is not None else "/dev/null",
             tofile="/dev/null" if delete else path))
         if dry_run:
