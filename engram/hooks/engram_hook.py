@@ -128,7 +128,7 @@ def _spawn_autostart():
     try:
         code = ("import sys; sys.path.insert(0, %r); from engram import client; "
                 "client.autostart()" % _ROOT)
-        subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.DEVNULL,
+        subprocess.Popen([sys.executable, "-I", "-c", code], stdin=subprocess.DEVNULL,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True, close_fds=True)
         _note("autostart")

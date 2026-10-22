@@ -48,3 +48,11 @@ Before was O(n) (about 3 ms per 1k rows from FTS alone, plus the quadratic floor
 
 ## Dedup window cap (decision record)
 The 2000-row FTS window in the dedup path is a deliberate, owner-accepted trade-off. Full record, symptoms and how to trace a problem back to it: `docs/adr/0008-dedup-fts-window-cap.md` (`mnemo status` shows the cap state; memories created while capped carry `meta.dedup_window_capped`).
+
+## P2b packaging and installer
+- The hook block lives in exactly one place (`engram/install.py:hooks_block`); `settings.hooks.json` is generated from it and a test compares them. Two hand-maintained copies would drift.
+- A committed hooks block in a public repo captures contributors' prompts (ADR 0009): hooks belong to the installed product and are opt-in per user. The repo test now asserts the absence of `hooks`.
+- Recording `sys.executable` in the hook command removes PATH dependence but ties the hooks to that environment; moving or recreating the venv requires rerunning `mnemo install claude-code` (`--status` shows the recorded interpreter).
+- Editing a user's settings file is merge-only: JSON is re-serialised with 2-space indent, so formatting/comments of a hand-formatted file change (JSON has no comments); the first-change backup `settings.json.engram-backup` keeps the original bytes.
+- `python -m pkg` puts the current directory first on `sys.path`: any command Engram registers or spawns (hook, MCP server, autostarted daemon) must run isolated (`-I`) or from an explicit package root, otherwise a project with a fake `engram/` package gets code execution in every session. The daemon bootstrap is `[python, -I, -c, bootstrap, package_root]` with cwd = Engram home. Covered by `tests/test_poisoned_cwd.py`.
+- T30 remainder: Cursor and other hosts, auto-update.

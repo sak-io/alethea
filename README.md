@@ -4,19 +4,31 @@ Long-term memory for AI coding agents, modeled on how human memory works.
 
 Each AI session keeps its own context window. Engram is the layer that survives after the session ends: it remembers what mattered, abstracts specifics into durable facts, and lets the rest fade. It is a local daemon with a SQLite store, a command-line tool (`mnemo`) and an MCP server.
 
-- Pure Python standard library plus SQLite. No pip installs, no network calls, no embedding API.
-- MCP-capable hosts (Claude Code, Cursor, ...) can call the `recall`, `remember`, `reflect`, `forget` and `engram_status` tools voluntarily today. Claude Code hook wiring now exists (`.claude/settings.json`, `.mcp.json`, see `integrations/claude-code/README.md`): prompts and replies are journaled and a briefing is injected at session start. Contributors: hooks run in this repo's own sessions and journal your prompts (redacted) to `~/.engram`; opt-out steps are in that README.
+- Pure Python standard library plus SQLite. No runtime dependencies, no network calls, no embedding API.
+- MCP-capable hosts (Claude Code, Cursor, ...) can call the `recall`, `remember`, `reflect`, `forget` and `engram_status` tools voluntarily today. Claude Code hooks ship with the installed package: `mnemo install claude-code` journals prompts and replies and injects a briefing at session start (see `integrations/claude-code/README.md`). This source repo does NOT enable hooks (`docs/adr/0009-hooks-ship-with-the-package.md`), so cloning it never journals your sessions.
 
 ## Status
 
 Built and tested: the core engine (storage, encode gate and dedup, recall, activation and decay, consolidation and sleep cycle, redaction), the daemon (Unix socket, optional token-authenticated TCP), the fail-soft client, the stdio MCP server and the `mnemo` CLI.
 
-Claude Code hooks and wiring (T22, T23) and `export-rules` sync-back (T24) are built. Not yet built: `reembed`, and the optional plugins (learned embedder, LLM-assisted consolidation). Recall uses a hashed n-gram embedder, so paraphrases that share no words with a memory can miss.
+Claude Code hooks (T22), the Claude Code installer and packaging (part of T30) and `export-rules` sync-back (T24) are built. Not yet built: `reembed`, and the optional plugins (learned embedder, LLM-assisted consolidation). Recall uses a hashed n-gram embedder, so paraphrases that share no words with a memory can miss.
 
 ## Requirements
 
 - POSIX only (Linux, macOS, BSD). On other platforms the daemon refuses to start (exit 2) and the client, CLI and MCP server report `unsupported platform: POSIX only`.
 - Python 3.9+ with SQLite compiled with FTS5.
+
+## Install
+
+```sh
+pipx install engram-memory                                 # PyPI name to be confirmed; NOT published yet
+pipx install git+https://github.com/sak-io/engram          # once this branch is merged to main (or add @<ref> for a specific ref)
+# or: pip install engram-memory / pip install git+https://github.com/sak-io/engram
+mnemo install claude-code                                  # hooks into ~/.claude/settings.json (or $CLAUDE_CONFIG_DIR)
+mnemo install claude-code --mcp                            # also register the MCP server (needs the `claude` CLI)
+```
+
+`mnemo install claude-code --scope local|project` and `--dry-run` (prints a diff) are described in `integrations/claude-code/README.md`. The PyPI distribution name `engram-memory` must be confirmed before any publish; nothing has been published. Upgrade: `pipx upgrade engram-memory` (or reinstall from git) and rerun `mnemo install claude-code` if the interpreter path changed. Uninstall: `mnemo uninstall claude-code`, then `pipx uninstall engram-memory`. Entry points: `mnemo`, `engram-daemon`, `engram-hook`, `engram-mcp`.
 
 ## Quick start
 
@@ -37,7 +49,7 @@ The daemon keeps running until you stop it: `kill <pid>`, with the pid shown by 
 
 ### Use it from Claude Code (MCP)
 
-The MCP server does not start the daemon, so run `mnemo up` first. Then register the server in a project-level `.mcp.json`, using absolute paths:
+The MCP server does not start the daemon, so run `mnemo up` first. With the package installed, `mnemo install claude-code --mcp` registers the server. From a clone, register it in a project-level `.mcp.json`, using absolute paths:
 
 ```json
 {

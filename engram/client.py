@@ -256,6 +256,22 @@ def _open_private(path, flags, mode):
         raise
 
 
+# Bootstrap for the detached daemon. `python -m engram.daemon` would put the CURRENT directory first
+# on sys.path, so a project containing a fake `engram/` package could run its code as a long-lived
+# daemon. -I drops cwd/PYTHONPATH/user site; the real package root is passed explicitly.
+_BOOTSTRAP = ("import sys; sys.path.insert(0, sys.argv[1]); del sys.argv[1:]; "
+              "from engram.daemon import main; sys.exit(main())")
+
+
+def package_root():
+    """Directory holding the `engram` package this client itself was imported from."""
+    return os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+
+
+def daemon_command():
+    return [sys.executable, "-I", "-c", _BOOTSTRAP, package_root()]
+
+
 def autostart(env=None, wait=2.0, cmd=None):
     """Spawn the daemon detached if it is down; True if it answers afterwards.
 
@@ -287,9 +303,10 @@ def autostart(env=None, wait=2.0, cmd=None):
                 with _open_private(stamp, os.O_TRUNC, "w") as f:
                     f.write(str(os.getpid()))
                 e = dict(_env(env))
-                pkg_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                e["ENGRAM_HOME"] = os.path.abspath(home)  # the daemon starts with cwd = home
+                pkg_parent = package_root()
                 e["PYTHONPATH"] = pkg_parent + os.pathsep + e.get("PYTHONPATH", "")
-                subprocess.Popen(cmd or [sys.executable, "-m", "engram.daemon"], env=e,
+                subprocess.Popen(cmd or daemon_command(), env=e, cwd=home,
                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                  stderr=subprocess.DEVNULL, start_new_session=True,
                                  close_fds=True)

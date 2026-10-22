@@ -94,6 +94,19 @@ def build_parser():
     s.add_argument("--target", choices=["all", "claude", "cursor"], default="all")
     s.add_argument("--if-changed", action="store_true",
                    help="only refresh existing Engram-owned files; create nothing, quiet")
+    for name, verb in (("install", "install"), ("uninstall", "remove")):
+        s = add(name, "%s Engram's hooks for a host (only claude-code so far)" % verb)
+        s.add_argument("host", choices=["claude-code"])
+        s.add_argument("--scope", choices=["user", "local", "project"], default=None,
+                       help="user (default; ~/.claude/settings.json or $CLAUDE_CONFIG_DIR), "
+                            "local (<git root>/.claude/settings.local.json) or project "
+                            "(<git root>/.claude/settings.json, committed)")
+        s.add_argument("--dry-run", action="store_true", help="print a diff, write nothing")
+        if name == "install":
+            s.add_argument("--status", action="store_true",
+                           help="show where hooks are installed (all scopes unless --scope)")
+            s.add_argument("--mcp", action="store_true",
+                           help="also register the MCP server with `claude mcp add`")
     add("reembed", "re-embed stored vectors (not yet available)")
     return p
 
@@ -314,14 +327,19 @@ def _later(args):
     return EXIT_NA if _strict(args) else EXIT_OK
 
 
-COMMANDS = {"status": cmd_status, "up": cmd_up, "sleep": cmd_sleep, "recall": cmd_recall,
+def cmd_install(args):
+    from engram import install
+    return install.run(args)
+
+
+COMMANDS = {"install": cmd_install, "uninstall": cmd_install, "status": cmd_status, "up": cmd_up, "sleep": cmd_sleep, "recall": cmd_recall,
             "remember": cmd_remember, "forget": cmd_forget, "dump": cmd_dump,
             "export-rules": cmd_export_rules, "reembed": _later}
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    if not client.SUPPORTED:
+    if not client.SUPPORTED and args.cmd not in ("install", "uninstall"):
         _err(client.UNSUPPORTED_MSG)
         return _offline_exit(args)
     try:
