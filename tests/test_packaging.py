@@ -21,8 +21,11 @@ class PyprojectTest(unittest.TestCase):
     def test_no_runtime_dependencies(self):
         proj = section("project")
         self.assertRegex(proj, r"(?m)^dependencies\s*=\s*\[\s*\]")
-        self.assertNotIn("optional-dependencies", TEXT)
-        self.assertNotIn("[project.optional", TEXT)
+        # T25: the only optional extra is the opt-in local embedder; nothing at runtime.
+        extras = re.findall(r"(?m)^\[project\.optional-dependencies\]\s*\n((?:[^\[\n].*\n?)*)", TEXT)
+        self.assertEqual(len(extras), 1)
+        self.assertEqual(re.findall(r"(?m)^(\w+)\s*=", extras[0]), ["local"])
+        self.assertIn("fastembed", extras[0])
 
     def test_setuptools_is_build_requirement_only(self):
         self.assertRegex(section("build-system"), r'requires\s*=\s*\["setuptools>=61"\]')
