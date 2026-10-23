@@ -27,7 +27,8 @@ except ImportError:
     fcntl = None
 
 from engram import __version__, consolidate, encode, export, gitctx, recall, vectorize
-from engram.config import MAX_REQUEST_BYTES, ensure_private_dir, home_dir, load_config
+from engram.config import (MAX_REQUEST_BYTES, ensure_private_dir, home_dir, llm_mode,
+                           load_config)
 from engram.cortex import Cortex
 from engram.fairlock import FairLock
 
@@ -46,7 +47,7 @@ SLEEP_BUDGET_S = 120.0
 UNIX_PATH_MAX = 104
 MIN_TOKEN_LEN = 16
 AUTH_TABLE_MAX = 1024
-UNSUPPORTED = ("reembed", "pending")
+UNSUPPORTED = ("reembed",)
 _KINDS = ("episodic", "semantic", "procedural", "identity")
 _PUBLIC = ("id kind content gist keywords salience strength access_count created_at "
            "last_access status session_id cwd repo_root embedder_id meta").split()
@@ -212,12 +213,41 @@ class Engram:
         self._activity_since_sleep = False
         self._sleeping = threading.Lock()
         self._bg = set()
+        self.llm, self.llm_error = None, None
+        self._init_llm(cfg)
         self.verbs = {
             "remember": self.v_remember, "recall": self.v_recall, "observe": self.v_observe,
             "briefing": self.v_briefing, "reflect": self.v_reflect, "forget": self.v_forget,
             "sleep": self.v_sleep, "session_end": self.v_session_end,
             "status": self.v_status, "dump": self.v_dump, "ping": self.v_ping,
-            "export_rules": self.v_export_rules}
+            "export_rules": self.v_export_rules, "pending": self.v_pending,
+            "distill_submit": self.v_distill_submit}
+
+    def _init_llm(self, cfg):
+        """Optional LLM distillation (T27, ADR 0012). With the flag off nothing is imported,
+        started or queued. An invalid direct-API configuration leaves the feature OFF (the
+        extractive path continues) with a visible reason; it never opens a connection."""
+        mode = llm_mode(cfg)
+        if mode == "off":
+            return
+        from engram import distill  # lazy: not imported while the flag is off
+        adapter = None
+        if mode == "api":
+            from engram import llm_api
+            try:
+                adapter = llm_api.build_adapter(cfg, self.env, self.mono)
+            except llm_api.ConfigError as e:
+                self.llm_error = "api mode disabled: %s" % e
+                sys.stderr.write("engram: %s\n" % self.llm_error)
+                return
+        self.llm = distill.Service(self.cortex, self.lock, cfg, mode, adapter, self.mono)
+
+    def _llm_host(self):
+        if self.llm is None:
+            raise BadRequest("LLM distillation is off (set ENGRAM_LLM_CONSOLIDATE=1)")
+        if self.llm.mode != "host":
+            raise BadRequest("distillation runs inside the daemon (api mode)")
+        return self.llm
 
     # dispatch
 
@@ -329,6 +359,25 @@ class Engram:
             items = export.select_items(self.cortex, root)
         return {"ok": True, "items": items, "count": len(items)}
 
+    def v_pending(self, p):
+        """Host-callback mode: queued episodes as inert, redacted, size-capped plain text."""
+        svc = self._llm_host()
+        return svc.pending(int(_num(p, "n", 1, 5, 3)))
+
+    def v_distill_submit(self, p):
+        """The ONLY way distilled bullets are accepted (ADR 0012): validated, then every bullet
+        goes through the full encode() gate; never deliberate, never identity."""
+        svc = self._llm_host()
+        eid = _str(p, "episode_id", True, 32)
+        bullets = p.get("bullets")
+        if not isinstance(bullets, list):
+            raise BadRequest("bullets must be a list of strings")
+        from engram import distill
+        try:
+            return svc.submit(eid, bullets)
+        except distill.Invalid as e:
+            raise BadRequest(str(e))
+
     def v_forget(self, p):
         mid = _str(p, "id", True, 128)
         with self.lock:
@@ -346,8 +395,14 @@ class Engram:
             return {"ok": True, "skipped": "already running"}
         try:
             kw.setdefault("budget_s", SLEEP_BUDGET_S)
+            api = kw.pop("api_ok", False)
+            llm_kw = {}
+            if self.llm is not None:
+                llm_kw["llm"] = self.llm
+                if api and self.llm.adapter is not None:
+                    llm_kw["llm_api"] = self.llm.api_cycle
             res = consolidate.sleep_cycle(self.cortex, distiller=self.distiller,
-                                          lock=self.lock, **kw)
+                                          lock=self.lock, **llm_kw, **kw)
             self._activity_since_sleep = False
             self.last_sleep_mono = self.mono()
             return res
@@ -395,6 +450,9 @@ class Engram:
             last = self.cortex.meta_get("last_sleep")
             schema = self.cortex.schema_version
             dedup = encode.dedup_cap_state(self.cortex)
+            distiller = self.llm.status() if self.llm is not None else {"mode": "off"}
+        if self.llm_error:
+            distiller["error"] = self.llm_error
         try:
             last = float(last) if last is not None else None
         except ValueError:
@@ -402,7 +460,7 @@ class Engram:
         return {"ok": True, "version": __version__, "schema_version": schema,
                 **vectorize.status(), "fts": self.cortex.fts_available,
                 "counts": counts, "total": sum(sum(v.values()) for v in counts.values()),
-                "journal_pending": pending, "dedup": dedup, "last_sleep": last, "pid": os.getpid(),
+                "journal_pending": pending, "dedup": dedup, "distiller": distiller, "last_sleep": last, "pid": os.getpid(),
                 "uptime_s": round(self.mono() - self.started, 1),
                 "sleep_interval_s": self.sleep_interval, "idle_sleep_s": self.idle_sleep}
 
@@ -442,7 +500,7 @@ class Engram:
         """One loop iteration (tests call this with an injected clock). Never raises."""
         try:
             if self.sleep_due():
-                self._run_sleep(keep_sessions=self._live_sessions())
+                self._run_sleep(keep_sessions=self._live_sessions(), api_ok=True)
                 return True
         except Exception as e:
             sys.stderr.write("engram: sleep loop error: %s\n" % type(e).__name__)
@@ -876,8 +934,6 @@ def warn_reserved(cfg):
     except vectorize.UnknownEmbedder:
         bad.append("ENGRAM_EMBEDDER=%s (unknown embedder; valid: hash, fastembed:<model>)"
                    % cfg["ENGRAM_EMBEDDER"])
-    if cfg.get("ENGRAM_LLM_CONSOLIDATE"):
-        bad.append("ENGRAM_LLM_CONSOLIDATE (no LLM consolidation exists; the daemon ignores it)")
     if bad:
         _reserved_warned = True
         sys.stderr.write("engram: reserved option(s) not implemented yet, ignored: %s\n"

@@ -64,7 +64,7 @@ class ReservedOptionWarningTest(unittest.TestCase):
         out = self.run_warn(cfg)
         self.assertEqual(out.count("\n"), 1)
         self.assertIn("ENGRAM_EMBEDDER=openai", out)
-        self.assertIn("ENGRAM_LLM_CONSOLIDATE", out)
+        self.assertNotIn("ENGRAM_LLM_CONSOLIDATE", out)  # implemented by T27: no longer reserved
         self.assertEqual(self.run_warn(cfg), "")
 
     def test_engram_constructor_warns(self):

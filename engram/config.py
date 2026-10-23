@@ -15,8 +15,18 @@ DEFAULTS = {
     "ENGRAM_EMBEDDER_TIMEOUT": "1.0",      # seconds one embedding call may take (float)
     "ENGRAM_SLEEP_INTERVAL": 900,
     "ENGRAM_IDLE_SLEEP": 180,
-    "ENGRAM_LLM_CONSOLIDATE": False,
+    "ENGRAM_LLM_CONSOLIDATE": False,       # T27: off by default; see docs/adr/0012
+    "ENGRAM_LLM_API": "",                  # "", "openai" or "anthropic" (direct-API mode)
+    "ENGRAM_LLM_ALLOW_REMOTE": False,      # acknowledge that transcripts leave this machine
+    "ENGRAM_LLM_URL": "",
+    "ENGRAM_LLM_MODEL": "",
+    "ENGRAM_LLM_PENDING_TTL": 3 * 24 * 3600,   # seconds a queued episode waits for the host
+    "ENGRAM_LLM_BUDGET": 5,                # API mode: episodes per sleep cycle
+    "ENGRAM_LLM_DAILY_CAP": 50,            # API mode: calls per UTC day
+    "ENGRAM_LLM_TIMEOUT": "30",            # API mode: seconds per call (float)
 }
+# ENGRAM_LLM_API_KEY is deliberately NOT here: it is read from the process environment only,
+# never from config.json and never copied into any config dict, status or log.
 
 
 def home_dir(env=None):
@@ -61,3 +71,10 @@ def load_config(env=None, home=None):
         if k in env:
             cfg[k] = _coerce(d, env[k])
     return cfg
+
+
+def llm_mode(cfg):
+    """'off' (default), 'host' (host-callback) or 'api' (direct API; needs a valid adapter)."""
+    if not cfg.get("ENGRAM_LLM_CONSOLIDATE"):
+        return "off"
+    return "api" if str(cfg.get("ENGRAM_LLM_API") or "").strip() else "host"
