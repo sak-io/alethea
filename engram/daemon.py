@@ -460,7 +460,8 @@ class Engram:
         return {"ok": True, "version": __version__, "schema_version": schema,
                 **vectorize.status(), "fts": self.cortex.fts_available,
                 "counts": counts, "total": sum(sum(v.values()) for v in counts.values()),
-                "journal_pending": pending, "dedup": dedup, "distiller": distiller, "last_sleep": last, "pid": os.getpid(),
+                "journal_pending": pending, "dedup": dedup, "distiller": distiller,
+                "last_sleep": last, "pid": os.getpid(),
                 "uptime_s": round(self.mono() - self.started, 1),
                 "sleep_interval_s": self.sleep_interval, "idle_sleep_s": self.idle_sleep}
 

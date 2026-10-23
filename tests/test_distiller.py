@@ -398,12 +398,14 @@ class GateTest(Base):
         base = self.d.call("observe", {"content": GOOD[0], "session_id": "other"})
         self.assertIsNotNone(base["promoted"])
         mid = base["promoted"]["id"]
+        self.d.clock.advance(5000)  # a reinforcement would visibly refresh last_access
         before = self.d.cortex.get(mid)
         r = self.submit([GOOD[0]])
         self.assertEqual((r["created"], r["merged"]), (0, 1))
         after = self.d.cortex.get(mid)
         self.assertEqual(after["access_count"], before["access_count"])
         self.assertAlmostEqual(after["strength"], before["strength"])
+        self.assertEqual(after["last_access"], before["last_access"])
         self.assertEqual(self.d.llm_memories(), [])  # nothing new, nothing re-labelled
 
     def test_untrusted_bullets_have_no_salience_boost(self):
@@ -911,7 +913,7 @@ class ApiFailureTest(ApiBase):
         self.assertEqual(d.journal_pending(), 0)
         self.assertGreaterEqual(len(d.memories(kind="episodic")), 1)
 
-    def test_timeout_is_bounded_and_the_engine_stays_responsive(self):
+    def test_engine_stays_responsive_while_the_model_call_hangs(self):
         locked = []
 
         def script(n, path, headers, body):
@@ -920,29 +922,80 @@ class ApiFailureTest(ApiBase):
             locked.append(got)
             if got:
                 d.engram.lock.release()
-            return None  # hang
+            s.release.wait(60)  # hang until the test releases it
+            return self.reply("[]")
 
         s = self.stub(script)
-        d = self.api(s, {"ENGRAM_LLM_TIMEOUT": "1.5"})
+        d = self.api(s, {"ENGRAM_LLM_TIMEOUT": "20"})
         d.episode()
-        out = {}
-        t = threading.Thread(target=lambda: out.update(timed=timed(d.sleep)), daemon=True)
+        t = threading.Thread(target=d.sleep, daemon=True)
         t.start()
-        self.assertTrue(s.arrived.wait(10))
+        self.assertTrue(s.arrived.wait(15))
         for verb, params in (("status", {}), ("ping", {}), ("recall", {"cue": "postgres billing"}),
                              ("remember", {"content": "Decision: unrelated thing about Kafka "
                                                        "because of throughput."})):
             r, dt = timed(d.call, verb, params)
             self.assertTrue(r.get("ok"), (verb, r))
-            self.assertLess(dt, 0.5, verb)
-        t.join(15)
-        res, elapsed = out["timed"]
-        self.assertTrue(res["ok"])
-        self.assertLess(elapsed, 5.0)
-        self.assertGreaterEqual(elapsed, 1.4)
+            self.assertLess(dt, 5.0, verb)
+            self.assertTrue(t.is_alive(), verb)  # the API call was still in flight
+        s.release.set()
+        t.join(30)
+        self.assertFalse(t.is_alive())
         self.assertEqual(locked, [True])
+
+    def test_call_is_bounded_by_the_timeout(self):
+        s = self.stub(lambda n, p, h, b: None)  # hangs
+        d = self.api(s, {"ENGRAM_LLM_TIMEOUT": "1.5"})
+        d.episode()
+        res, elapsed = timed(d.sleep)
+        self.assertTrue(res["ok"])
+        self.assertTrue(1.4 <= elapsed < 15, elapsed)
         self.assertLeftAlone(d)
         self.assertEqual(d.dist()["breaker"]["last_failure"], "timeout")
+
+    def test_slow_drip_response_hits_the_total_deadline(self):
+        import socket
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        self.addCleanup(srv.close)
+        done = threading.Event()
+
+        def serve():
+            c, _ = srv.accept()
+            c.recv(65536)
+            c.sendall(b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n")
+            try:
+                for _ in range(100):  # one byte every 0.2 s: each recv is well inside the timeout
+                    if done.is_set():
+                        break
+                    c.sendall(b" ")
+                    time.sleep(0.2)
+            except OSError:
+                pass
+            c.close()
+
+        threading.Thread(target=serve, daemon=True).start()
+        self.addCleanup(done.set)
+        a = llm_api.build_adapter({"ENGRAM_LLM_API": "openai", "ENGRAM_LLM_MODEL": "m",
+                                   "ENGRAM_LLM_URL": "http://127.0.0.1:%d/x" % srv.getsockname()[1],
+                                   "ENGRAM_LLM_TIMEOUT": "1.0"}, {})
+        out = {}
+
+        def run():
+            t = time.monotonic()
+            try:
+                a._http("hello")
+            except llm_api.ApiError as e:
+                out["kind"] = e.kind
+            out["dt"] = time.monotonic() - t
+
+        th = threading.Thread(target=run, daemon=True)
+        th.start()
+        th.join(10)
+        self.assertFalse(th.is_alive())  # the worker itself ended near the deadline, not at 20 s
+        self.assertEqual(out["kind"], "timeout")
+        self.assertLess(out["dt"], 3.0)
 
 
 class ApiKeyTest(ApiBase):

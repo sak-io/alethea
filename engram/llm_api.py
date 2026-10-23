@@ -189,8 +189,18 @@ class Adapter:
         req = urllib.request.Request(self.url, data=self._body(user), headers=self._headers(),
                                      method="POST")
         try:
+            deadline = time.monotonic() + self.timeout
             with opener.open(req, timeout=self.timeout) as resp:
-                raw = resp.read(MAX_RESPONSE_BYTES + 1)
+                chunks, got = [], 0
+                while got <= MAX_RESPONSE_BYTES:  # total deadline: a slow drip cannot linger
+                    if time.monotonic() > deadline:
+                        raise ApiError("timeout")
+                    c = resp.read1(min(8192, MAX_RESPONSE_BYTES + 1 - got))
+                    if not c:
+                        break
+                    chunks.append(c)
+                    got += len(c)
+                raw = b"".join(chunks)
         except urllib.error.HTTPError as e:
             code = e.code
             e.close()

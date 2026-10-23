@@ -383,7 +383,7 @@ def _best_duplicate(cortex, content, embedder_id, vec=None):
 
 def encode(cortex, content, kind=None, salience=None, force=False, deliberate=False,
            session_id=None, cwd=None, repo_root=None, meta=None,
-           embedder_id=None, embedded=None):
+           embedder_id=None, embedded=None, reinforce=True):
     """The encode gate. Returns {"status": "created"|"reinforced"|"rejected", ...}.
 
     Content, gist, keywords and meta are redacted before anything is stored. `embedded` is
@@ -404,7 +404,8 @@ def encode(cortex, content, kind=None, salience=None, force=False, deliberate=Fa
         embedder_id, (vec,) = vectorize.embed_batch([content], embedder_id)
     best, dup = _best_duplicate(cortex, content, embedder_id, vec)
     if dup is not None and best >= threshold(embedder_id):
-        cortex.reinforce(dup["id"], REINFORCE_STEP)
+        if reinforce:  # False: report the merge target but leave it untouched (T27 distiller)
+            cortex.reinforce(dup["id"], REINFORCE_STEP)
         return {"status": "reinforced", "id": dup["id"], "similarity": best}
     surprise = max(0.0, min(1.0, 1.0 - best))
     explicit = salience is not None

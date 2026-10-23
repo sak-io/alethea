@@ -7,7 +7,7 @@ rules that follow from that, enforced here:
     identity or episodic, always stamped meta {source, distilled_from};
   * a model-written memory is not promotable (briefing, exported rules) until it has been
     reinforced by use (encode.withheld); a re-submission that the gate merges into an existing
-    memory does NOT count as reinforcement (the bump is undone);
+    memory does NOT count as reinforcement (encode(reinforce=False) leaves the target untouched);
   * the daemon never calls a model itself in host mode; in api mode the call happens in the
     idle sleep cycle, outside every lock (llm_api.py);
   * an episode is marked consolidated only after a bullet was accepted or the host sent an
@@ -271,7 +271,7 @@ class Service:
             r = encode.encode(
                 c, t, kind=kind, embedded=emb, session_id=rec.get("session_id"),
                 cwd=rec.get("cwd"), repo_root=rec.get("repo_root"),
-                meta={"source": source, "distilled_from": eid})
+                meta={"source": source, "distilled_from": eid}, reinforce=False)
             st = r["status"]
             if st == "created":
                 created += 1
@@ -279,11 +279,6 @@ class Service:
             elif st == "reinforced":
                 merged += 1
                 mids.append(r["id"])
-                # a distiller merge is not use: undo the access/strength bump the gate applied
-                c.db.execute("UPDATE memories SET access_count=MAX(1, access_count-1), "
-                             "strength=MAX(?, strength-?) WHERE id=?",
-                             (1e-3, encode.REINFORCE_STEP, r["id"]))
-                c.db.commit()
             else:
                 rejected.append({"index": i, "reason": str(r.get("reason") or "rejected")[:24]})
         accepted = created + merged
