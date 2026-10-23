@@ -281,6 +281,9 @@ _failures = 0          # consecutive call failures
 _open_until = 0.0      # breaker open until this monotonic time (0 = closed)
 _cooldown = 0.0
 _probing = False
+_probe_job = None      # the probe whose result still counts
+_probe_deadline = 0.0
+_last_failure = None   # "<kind> <ExcClass>" of the last call failure (shown while falling back)
 _failing = False       # last attempt (load or call) failed
 _fallbacks = 0
 _logged = set()
@@ -326,12 +329,17 @@ def _log_once(kind, spec, exc=None):
         pass
 
 
-def _num(v, default, lo=0.0):
+EMBED_TIMEOUT_RANGE = (0.05, 10.0)
+LOAD_TIMEOUT_RANGE = (1.0, 900.0)
+
+
+def _num(v, default, lo, hi):
+    """float(v) clamped to [lo, hi]; the default for anything that is not a finite number."""
     try:
         v = float(v)
     except (TypeError, ValueError):
         return default
-    return v if math.isfinite(v) and v >= lo else default
+    return min(hi, max(lo, v)) if math.isfinite(v) else default
 
 
 def configure(spec, quiet=False, background=False, load_timeout=None, embed_timeout=None):
@@ -349,9 +357,9 @@ def configure(spec, quiet=False, background=False, load_timeout=None, embed_time
         _probing = False
         _dense_cache.clear()
         if load_timeout is not None:
-            LOAD_TIMEOUT = _num(load_timeout, 120.0, 0.001)
+            LOAD_TIMEOUT = _num(load_timeout, 120.0, *LOAD_TIMEOUT_RANGE)
         if embed_timeout is not None:
-            EMBED_TIMEOUT = _num(embed_timeout, 1.0, 0.001)
+            EMBED_TIMEOUT = _num(embed_timeout, 1.0, *EMBED_TIMEOUT_RANGE)
     try:
         parse_spec(_spec)
     except UnknownEmbedder as e:
@@ -587,23 +595,33 @@ def _open_breaker(now):
 
 
 def _probe_done(job):
-    global _probing, _failing, _failures, _open_until, _cooldown
+    global _probing, _failing, _failures, _open_until, _cooldown, _probe_job
     kind = None
     with _lock:
-        _probing = False
+        if _probe_job is not job:
+            return  # the probe already timed out and was counted as a failure
+        _probing, _probe_job = False, None
         if job.error is None:
             _failing, _failures, _open_until, _cooldown = False, 0, 0.0, 0.0
         else:
             _open_breaker(time.monotonic())
             kind = job.error.kind if isinstance(job.error, _Bad) else "error"
+            _set_last_failure(kind, job.error)
     if kind:
         _log_once(kind, _spec, None if isinstance(job.error, _Bad) else job.error)
+
+
+def _set_last_failure(kind, exc):
+    global _last_failure
+    _last_failure = "%s %s" % (kind, type(exc).__name__) if exc is not None and not isinstance(exc, _Bad) \
+        else kind
 
 
 def _note_failure(kind, exc):
     global _failing, _failures
     with _lock:
         _failing = True
+        _set_last_failure(kind, exc)
         _failures += 1
         if _failures >= BREAKER_N:
             _open_breaker(time.monotonic())
@@ -640,28 +658,42 @@ def _dense(inst, texts):
 
 def _bounded(inst, todo):
     """Daemon mode: one worker call with a timeout, behind the circuit breaker."""
-    global _probing, _failing, _failures
+    global _probing, _failing, _failures, _probe_job, _probe_deadline
     now = time.monotonic()
+    probe_hung = False
+    job = None
+    stuck = False
     with _lock:
         if _open_until:
-            if now < _open_until or _probing:
-                return None                          # breaker open: no call, no waiting
-            if _busy_since is not None:
-                _replace_worker()                    # a whole cooldown and still stuck
-            _probing = True                          # cooldown over: ONE probe, off this thread
-            if not _submit(_Job(inst, ["engram embedder probe"], probe=True)):
-                _probing = False
+            if _probing:
+                if now <= _probe_deadline:
+                    return None
+                # The probe hung: it counts as a failure, the cooldown doubles and the stuck
+                # worker is abandoned (a daemon thread that exits if its call ever returns).
+                _probing, _probe_job = False, None
                 _open_breaker(now)
-            return None
-        if _busy_since is not None:
-            stuck = now - _busy_since > EMBED_TIMEOUT
+                _replace_worker()
+                _set_last_failure("timeout", None)
+                probe_hung = True
+            elif now < _open_until:
+                return None                          # breaker open: no call, no waiting
+            else:
+                if _busy_since is not None:
+                    _replace_worker()                # a whole cooldown and still stuck
+                probe = _Job(inst, ["engram embedder probe"], probe=True)
+                if _submit(probe):                   # cooldown over: ONE probe, off this thread
+                    _probing, _probe_job = True, probe
+                    _probe_deadline = now + EMBED_TIMEOUT
+                else:
+                    _open_breaker(now)
         else:
-            stuck = False
-        if _busy_since is not None:
-            job = None
-        else:
-            job = _Job(inst, todo)
-            _submit(job)
+            if _busy_since is not None:
+                stuck = now - _busy_since > EMBED_TIMEOUT
+            else:
+                job = _Job(inst, todo)
+                _submit(job)
+    if probe_hung:
+        _log_once("timeout", _spec, None)
     if job is None:
         if stuck:
             _note_failure("timeout", None)           # an earlier call is still hung
@@ -785,30 +817,39 @@ def status():
         else:
             state = "not-loaded"
         retry = None
+        reason = None
         if dense and _state == "failed" and _retry_at != float("inf"):
             retry = max(0.0, _retry_at - now)
         elif dense and broken:
             retry = max(0.0, _open_until - now)
+        elif failing and ready:
+            retry = 0.0   # breaker still closed: the next call tries the model again
+        if dense and (failing or state == "loading"):
+            if _state == "failed":
+                reason = _reason
+            elif broken:
+                reason = "circuit breaker open (last failure: %s)" % (_last_failure or "unknown")
+            else:
+                reason = _last_failure or _reason
         return {"embedder_id": _inst.id if (ready and not failing) else EMBEDDER_ID,
                 "embedder_configured": _spec, "embedder_state": state,
                 "embedder_falling_back": bool(failing or state == "loading"),
-                "embedder_reason": _reason if (failing or state == "loading") and _reason else
-                ("circuit breaker open" if broken else None),
+                "embedder_reason": reason,
                 "embedder_retry_in_s": None if retry is None else round(retry, 1),
                 "embedder_fallbacks": _fallbacks,
-                "embedder_dim": _inst.dim if ready else DIM}
+                "embedder_dim": _inst.dim if (ready and not failing) else DIM}
 
 
 def _reset_for_tests():
     global _spec, _inst, _state, _reason, _retry_at, _failing, _fallbacks, _async, _loader
     global _load_failures, _failures, _open_until, _cooldown, _probing, _jobs, _busy_since
-    global LOAD_TIMEOUT, EMBED_TIMEOUT
+    global LOAD_TIMEOUT, EMBED_TIMEOUT, _probe_job, _last_failure
     with _lock:
         _spec, _inst, _state, _reason, _retry_at = "hash", None, "idle", None, 0.0
         _failing, _fallbacks, _async, _loader = False, 0, False, None
         _load_failures = _failures = 0
         _open_until = _cooldown = 0.0
-        _probing = False
+        _probing, _probe_job, _last_failure = False, None, None
         _jobs, _busy_since = None, None
         LOAD_TIMEOUT, EMBED_TIMEOUT = 120.0, 1.0
         _logged.clear()

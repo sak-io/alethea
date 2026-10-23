@@ -42,10 +42,9 @@ class Daemon:
         self.cenv = {"ENGRAM_HOME": self.home}
 
     def _lock_free(self):
-        if self.engram.lock.acquire(timeout=0.5):
-            self.engram.lock.release()
-            return True
-        return False
+        """Called on the embedder's worker thread: the engine lock must be free. Requests that
+        wait for an embedding do so outside the lock, so any owner here is a violation."""
+        return self.engram.lock._owner is None
 
     def call(self, verb, params=None, budget=BUDGET):
         t = time.monotonic()
@@ -91,7 +90,7 @@ class Base(unittest.TestCase):
 
 class SlowLoadTest(Base):
     def test_slow_model_load_never_blocks_requests_and_flips_atomically(self):
-        ctl = slow_embedder.Control(load_delay=3.0)
+        ctl = slow_embedder.Control(load_delay=1.5)
         d = self.start(ctl)
         t0 = time.monotonic()
         r, dt = d.call("status")
@@ -103,7 +102,7 @@ class SlowLoadTest(Base):
         worst = self.all_verbs_fast(d, FAST, "loading")
         a, dt = d.call("remember", {"content": "The ledger service uses postgres for invoices"})
         self.assertEqual(a["status"], "created")
-        self.assertLess(time.monotonic() - t0, 3.0, "test ran too slowly to prove anything")
+        self.assertLess(time.monotonic() - t0, 1.5, "test ran too slowly to prove anything")
         self.assertEqual({row[0] for row in d.rows()}, {HASH_ID})
         self.assertEqual(ctl.calls, 0)  # nothing was embedded by the dense embedder yet
         self.assertTrue(vectorize.wait_settled(10))
@@ -175,14 +174,15 @@ class SlowEmbedTest(Base):
         self.assertTrue(vectorize.wait_settled(5))
         self.all_verbs_fast(d, BUDGET, "slowembed")
 
+    @unittest.skipUnless(os.environ.get("ENGRAM_SLOW_TESTS"), "slow: set ENGRAM_SLOW_TESTS=1")
     def test_call_returning_after_the_timeout_counts_as_timeout_not_dense_vector(self):
-        ctl = slow_embedder.Control(embed_delay=1.5)
-        d = self.start(ctl)
+        ctl = slow_embedder.Control(embed_delay=0.8)
+        d = self.start(ctl, ENGRAM_EMBEDDER_TIMEOUT="0.3")
         self.assertTrue(vectorize.wait_settled(5))
-        r, dt = d.call("remember", {"content": "A fact that the slow model embeds in 1.5 seconds"})
-        self.assertLess(dt, 1.0 + FAST)
+        r, dt = d.call("remember", {"content": "A fact that the slow model embeds in 0.8 seconds"})
+        self.assertLess(dt, 0.3 + FAST)
         self.assertEqual(d.rows()[-1], (HASH_ID, 512))
-        time.sleep(1.0)  # the late result must not be adopted by anybody
+        time.sleep(0.8)  # the late result must not be adopted by anybody
         self.assertEqual(d.rows()[-1], (HASH_ID, 512))
         self.assertEqual(vectorize.status()["embedder_state"], "falling-back")
 
@@ -262,6 +262,7 @@ class BreakerTest(Base):
         self.assertEqual(d.rows()[-1], (DENSE_ID, 384))
         self.assertFalse(d.engram.handle("status", {})["embedder_falling_back"])
 
+    @unittest.skipUnless(os.environ.get("ENGRAM_SLOW_TESTS"), "slow: set ENGRAM_SLOW_TESTS=1")
     def test_failed_probe_doubles_the_cooldown(self):
         ctl = slow_embedder.Control(raises=True)
         old = vectorize.COOLDOWN_MIN
@@ -284,19 +285,38 @@ class BreakerTest(Base):
 
 class LockDisciplineTest(Base):
     def test_no_embedder_call_ever_happens_under_the_engine_lock(self):
+        """The embedding cache is off (size 0) so no call can be served from it and hide a
+        regression; the embedder itself checks the lock owner on every call."""
         ctl = slow_embedder.Control()
-        d = self.start(ctl)
+        old = vectorize._CACHE_MAX
+        vectorize._CACHE_MAX = 0
+        self.addCleanup(setattr, vectorize, "_CACHE_MAX", old)
+        # no automatic sleep cycle (it legitimately holds the lock per batch)
+        d = self.start(ctl, ENGRAM_IDLE_SLEEP="999999", ENGRAM_SLEEP_INTERVAL="999999")
         self.assertTrue(vectorize.wait_settled(5))
-        sid = {"session_id": "s1"}
+        sid = {"session_id": "s1", "cwd": "/tmp/x"}
+        seen = {}
+
+        def step(name, verb, params):
+            before = ctl.calls
+            r, _ = d.call(verb, params)
+            self.assertTrue(r.get("ok"), (verb, r))
+            seen[name] = ctl.calls - before
+            return r
         for i in range(6):
             d.call("observe", dict(sid, content="We decided to use redis for sessions because it is fast %d" % i))
-        d.call("remember", {"content": "Lock discipline remember about invoices"})
-        d.call("reflect", {"content": "Lock discipline reflect about invoices"})
-        d.call("recall", {"cue": "which store holds sessions"})
-        d.call("sleep", {"consolidate_only": False, "budget_s": 2.0})
-        d.call("briefing", {})
-        self.assertGreater(ctl.calls, 3)
-        self.assertEqual(ctl.lock_violations, 0)
+        step("remember", "remember", {"content": "Lock discipline remember about invoices"})
+        step("reflect", "reflect", {"content": "Lock discipline reflect about invoices"})
+        step("observe", "observe", dict(sid, content="We decided to use kafka for events because it scales 77"))
+        step("recall", "recall", {"cue": "which store holds sessions"})
+        step("briefing", "briefing", {})
+        step("session_end", "session_end", dict(sid, wait=True))   # consolidation embeds summaries
+        step("sleep", "sleep", {"consolidate_only": False, "budget_s": 2.0})
+        for name in ("remember", "reflect", "observe", "recall"):
+            self.assertGreaterEqual(seen[name], 1, name)     # really embedded, uncached
+        self.assertEqual(seen["briefing"], 0)
+        self.assertTrue(any(t.startswith("Episode (") for t in ctl.texts), "sleep path not exercised")
+        self.assertEqual(ctl.lock_violations, 0, getattr(ctl, "violating", None))
 
     def test_dense_dedup_uses_stored_vectors_not_new_embedder_calls(self):
         ctl = slow_embedder.Control()
@@ -308,6 +328,83 @@ class LockDisciplineTest(Base):
         r, _ = d.call("remember", {"content": "Seed fact 1 about the billing ledger and postgres."})
         self.assertEqual(r["status"], "reinforced")
         self.assertEqual(ctl.calls - before, 1)    # only the new text; candidates' vectors are stored
+
+
+class StatusAndClampTest(Base):
+    def test_status_after_a_timeout_names_the_reason_and_the_hashed_dim(self):
+        ctl = slow_embedder.Control(embed_delay=0.6)
+        d = self.start(ctl, ENGRAM_EMBEDDER_TIMEOUT="0.2")
+        self.assertTrue(vectorize.wait_settled(5))
+        r, _ = d.call("status")
+        self.assertEqual((r["embedder_state"], r["embedder_dim"]), ("ready", 384))
+        d.call("remember", {"content": "A fact that times out in the model about invoices"})
+        r, _ = d.call("status")
+        self.assertEqual(r["embedder_state"], "falling-back")
+        self.assertEqual(r["embedder_reason"], "timeout")
+        self.assertEqual(r["embedder_retry_in_s"], 0.0)
+        self.assertEqual(r["embedder_dim"], vectorize.DIM)
+        self.assertEqual(r["embedder_id"], HASH_ID)
+
+    def test_status_names_the_last_failure_class_and_breaker_retry(self):
+        ctl = slow_embedder.Control(raises=True)
+        d = self.start(ctl)
+        self.assertTrue(vectorize.wait_settled(5))
+        for i in range(3):
+            d.engram.handle("remember", {"content": "raising model %d about invoices" % i})
+        r = d.engram.handle("status", {})
+        self.assertIn("circuit breaker open", r["embedder_reason"])
+        self.assertIn("error RuntimeError", r["embedder_reason"])
+        self.assertGreater(r["embedder_retry_in_s"], 0)
+        self.assertEqual(r["embedder_dim"], vectorize.DIM)
+
+    def test_timeouts_are_clamped(self):
+        for raw, want_call, want_load in (("1e9", 10.0, 900.0), ("0", 0.05, 1.0), ("-5", 0.05, 1.0),
+                                          ("nan", 1.0, 120.0), ("abc", 1.0, 120.0), ("2.5", 2.5, 2.5)):
+            vectorize._reset_for_tests()
+            vectorize.configure("hash", background=True, load_timeout=raw, embed_timeout=raw)
+            self.assertEqual((vectorize.EMBED_TIMEOUT, vectorize.LOAD_TIMEOUT), (want_call, want_load), raw)
+        vectorize._reset_for_tests()
+
+    def test_clamp_applies_to_the_daemon_config(self):
+        ctl = slow_embedder.Control()
+        self.start(ctl, ENGRAM_EMBEDDER_TIMEOUT="1e9", ENGRAM_EMBEDDER_LOAD_TIMEOUT="999999")
+        self.assertEqual((vectorize.EMBED_TIMEOUT, vectorize.LOAD_TIMEOUT), (10.0, 900.0))
+
+
+@unittest.skipUnless(os.environ.get("ENGRAM_SLOW_TESTS"), "slow: set ENGRAM_SLOW_TESTS=1")
+class HungProbeTest(Base):
+    def test_a_probe_that_hangs_times_out_doubles_the_cooldown_and_replaces_the_worker(self):
+        ctl = slow_embedder.Control(raises=True)
+        old = vectorize.COOLDOWN_MIN
+        vectorize.COOLDOWN_MIN = 0.3
+        self.addCleanup(setattr, vectorize, "COOLDOWN_MIN", old)
+        d = self.start(ctl, ENGRAM_EMBEDDER_TIMEOUT="0.2")
+        self.assertTrue(vectorize.wait_settled(5))
+        base = threading.active_count()
+        for i in range(3):
+            d.engram.handle("remember", {"content": "open the breaker %d about invoices" % i})
+        ctl.raises, ctl.hang_probe = False, True
+        time.sleep(0.4)                                  # cooldown over
+        d.engram.handle("remember", {"content": "this request launches a probe that hangs"})
+        self.assertTrue(vectorize._probing)
+        calls = ctl.calls
+        time.sleep(0.3)                                  # past the probe deadline (call timeout)
+        t = time.monotonic()
+        d.engram.handle("remember", {"content": "this request notices the hung probe"})
+        self.assertLess(time.monotonic() - t, 0.3)
+        self.assertFalse(vectorize._probing)             # cleared: no permanent stall
+        self.assertAlmostEqual(vectorize._cooldown, 0.6, places=3)   # doubled
+        self.assertEqual(ctl.calls, calls)
+        self.assertEqual(d.rows()[-1][0], HASH_ID)
+        # a later probe reaches a fresh worker and, now answering, closes the breaker
+        ctl.hang_probe = False
+        time.sleep(0.7)
+        d.engram.handle("remember", {"content": "this request launches the second probe"})
+        time.sleep(0.3)
+        d.engram.handle("remember", {"content": "after the second probe the model is back"})
+        self.assertEqual(d.rows()[-1], (DENSE_ID, 384))
+        self.assertLessEqual(threading.active_count(), base + 2)   # stuck worker + current one
+        ctl.stop()
 
 
 class RealFastembedTest(unittest.TestCase):

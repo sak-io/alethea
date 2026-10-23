@@ -13,6 +13,7 @@ class Control:
         self.load_delay = 0.0
         self.embed_delay = 0.0
         self.hang = False           # block in embed() until `release` is set
+        self.hang_probe = False     # hang only on the breaker's probe call
         self.raises = False
         self.load_raises = False
         self.calls = 0
@@ -41,7 +42,8 @@ class ControlledEmbedder(vectorize.Embedder):
             c.texts.extend(texts)
         if c.lock_probe is not None and not c.lock_probe():
             c.lock_violations += 1
-        if c.hang:
+            c.violating = list(texts)
+        if c.hang or (c.hang_probe and any("embedder probe" in t for t in texts)):
             c.release.wait()
         if c.embed_delay:
             time.sleep(c.embed_delay)
