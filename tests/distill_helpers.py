@@ -21,8 +21,7 @@ TURNS = [
 ]
 GOOD = [
     "Decision: the billing service uses Postgres 15 because it needs row level security.",
-    "The staging deploy failed because the database ran out of disk space; the volume was "
-    "expanded to 200 GB.",
+    "Decision: the platform team owns the nightly backup job because they run the storage cluster.",
 ]
 
 
