@@ -8,6 +8,7 @@ import math
 import re
 
 from engram import vectorize
+from engram.redact import redact
 
 MAX_CUE_CHARS = 2000
 # Minimum number of most-recently-touched rows the semantic (vector) channel scans (ADR 0008).
@@ -103,8 +104,10 @@ def _sigmoid(x):
 
 def embed_cue(cue, relevance_floor=True, embedder_id=None):
     """(embedder_id_used, [cue vector] or [cue vector, core vector]) for `candidates(embedded=)`.
-    Bounded and fail-soft; call it BEFORE taking the engine lock."""
-    cue = _cap(cue)
+    Bounded and fail-soft; call it BEFORE taking the engine lock. The cue is redacted first:
+    stored text is redacted, so the vectors then match it, and a secret typed into a recall
+    query never reaches an embedder (a remote one included; the remote adapter redacts again)."""
+    cue = redact(_cap(cue))
     if not cue.strip():
         return None
     core = " ".join(t for t in vectorize.tokenize(cue) if t not in STOPWORDS)

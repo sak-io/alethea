@@ -240,12 +240,11 @@ class Usage(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertIn("exit codes", r.stdout)
 
-    def test_later_tasks_say_not_yet_available(self):
-        for c in ("reembed",):
-            r = run("/nonexistent-engram-home", c)
-            self.assertEqual(r.returncode, 0)
-            self.assertIn("not yet available", r.stderr)
-            self.assertEqual(run("/nonexistent-engram-home", "--strict", c).returncode, 4)
+    def test_reembed_offline_is_fail_soft(self):
+        r = run("/nonexistent-engram-home", "reembed", "--dry-run")
+        self.assertEqual(r.returncode, 0)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertEqual(run("/nonexistent-engram-home", "--strict", "reembed").returncode, 3)
 
 
 class Up(unittest.TestCase):

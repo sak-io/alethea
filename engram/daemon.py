@@ -26,7 +26,7 @@ try:  # POSIX only
 except ImportError:
     fcntl = None
 
-from engram import __version__, consolidate, encode, export, gitctx, recall, vectorize
+from engram import __version__, consolidate, encode, export, gitctx, recall, reembed, vectorize
 from engram.config import MAX_REQUEST_BYTES, ensure_private_dir, home_dir, load_config
 from engram.cortex import Cortex
 from engram.fairlock import FairLock
@@ -46,7 +46,7 @@ SLEEP_BUDGET_S = 120.0
 UNIX_PATH_MAX = 104
 MIN_TOKEN_LEN = 16
 AUTH_TABLE_MAX = 1024
-UNSUPPORTED = ("reembed", "pending")
+UNSUPPORTED = ("pending",)
 _KINDS = ("episodic", "semantic", "procedural", "identity")
 _PUBLIC = ("id kind content gist keywords salience strength access_count created_at "
            "last_access status session_id cwd repo_root embedder_id meta").split()
@@ -197,6 +197,9 @@ class Engram:
         self.home = ensure_private_dir(home or home_dir(self.env))
         cfg = load_config(self.env, self.home)
         warn_reserved(cfg)
+        if str(cfg["ENGRAM_EMBEDDER"]).strip().lower().startswith("openai:"):
+            from engram import embedders_remote  # only when selected (ADR 0011)
+            embedders_remote.configure_env(self.env)
         vectorize.configure(cfg["ENGRAM_EMBEDDER"], quiet=True, background=True,
                             load_timeout=cfg["ENGRAM_EMBEDDER_LOAD_TIMEOUT"],
                             embed_timeout=cfg["ENGRAM_EMBEDDER_TIMEOUT"])  # lazy: nothing optional is imported yet
@@ -217,7 +220,9 @@ class Engram:
             "briefing": self.v_briefing, "reflect": self.v_reflect, "forget": self.v_forget,
             "sleep": self.v_sleep, "session_end": self.v_session_end,
             "status": self.v_status, "dump": self.v_dump, "ping": self.v_ping,
-            "export_rules": self.v_export_rules}
+            "export_rules": self.v_export_rules, "reembed": self.v_reembed}
+        self.reembed = reembed.Reembedder(self)
+        self.reembed.resume_if_running()   # a run that was in progress when we died continues
 
     # dispatch
 
@@ -231,7 +236,9 @@ class Engram:
             fn = self.verbs.get(verb)
             if fn is None:
                 return _err("unknown verb")
-            if verb not in ("ping", "status", "export_rules"):
+            if verb not in ("ping", "status", "export_rules") and not (
+                    verb == "reembed" and isinstance(params, dict)
+                    and params.get("action") in ("status", "plan")):
                 self.last_activity = self.mono()
                 self._activity_since_sleep = True
             return fn(params)
@@ -402,9 +409,29 @@ class Engram:
         return {"ok": True, "version": __version__, "schema_version": schema,
                 **vectorize.status(), "fts": self.cortex.fts_available,
                 "counts": counts, "total": sum(sum(v.values()) for v in counts.values()),
-                "journal_pending": pending, "dedup": dedup, "last_sleep": last, "pid": os.getpid(),
+                "journal_pending": pending, "dedup": dedup, "reembed": self.reembed.status(), "last_sleep": last, "pid": os.getpid(),
                 "uptime_s": round(self.mono() - self.started, 1),
                 "sleep_interval_s": self.sleep_interval, "idle_sleep_s": self.idle_sleep}
+
+    def v_reembed(self, p):
+        """action: plan (read-only counts) | start | status | cancel. Starting a run against a
+        remote embedder needs confirm=true (the CLI sends it only with --yes)."""
+        action = _str(p, "action", True, 16)
+        if action == "plan":
+            return dict(self.reembed.plan(), ok=True, action="plan")
+        if action == "status":
+            return {"ok": True, "action": "status", "reembed": self.reembed.status()}
+        if action == "cancel":
+            self.reembed.cancel()
+            return {"ok": True, "action": "cancel", "reembed": self.reembed.status()}
+        if action == "start":
+            batch = int(_num(p, "batch", 1, reembed.MAX_BATCH, reembed.DEFAULT_BATCH))
+            ok, why = self.reembed.start(confirm=_bool(p, "confirm", False), batch=batch,
+                                         include_identity=_bool(p, "include_identity", False))
+            if not ok:
+                return _err(why)
+            return {"ok": True, "action": "start", "reembed": self.reembed.status()}
+        raise BadRequest("action must be one of: plan, start, status, cancel")
 
     def v_dump(self, p):
         limit = int(_num(p, "limit", 1, DUMP_MAX, DUMP_DEFAULT))
@@ -453,6 +480,8 @@ class Engram:
             self.sleep_tick()
 
     def close(self):
+        with contextlib.suppress(Exception):
+            self.reembed.close()
         got = self.lock.acquire(timeout=5)
         try:
             with contextlib.suppress(Exception):
@@ -874,7 +903,7 @@ def warn_reserved(cfg):
     try:
         vectorize.parse_spec(cfg.get("ENGRAM_EMBEDDER", "hash"))
     except vectorize.UnknownEmbedder:
-        bad.append("ENGRAM_EMBEDDER=%s (unknown embedder; valid: hash, fastembed:<model>)"
+        bad.append("ENGRAM_EMBEDDER=%s (unknown embedder; valid: hash, fastembed:<model>, openai:<model>)"
                    % cfg["ENGRAM_EMBEDDER"])
     if cfg.get("ENGRAM_LLM_CONSOLIDATE"):
         bad.append("ENGRAM_LLM_CONSOLIDATE (no LLM consolidation exists; the daemon ignores it)")

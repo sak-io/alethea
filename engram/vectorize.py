@@ -251,9 +251,9 @@ class _Bad(Exception):
         self.kind = kind
 
 
-# scheme -> (module, factory name), imported only when that scheme is selected. T26 adds
-# "openai": ("engram.embedders_ext", "make_openai") here (or calls register_scheme()).
-_LAZY = {"fastembed": ("engram.embedders_ext", "make_fastembed")}
+# scheme -> (module, factory name), imported only when that scheme is selected.
+_LAZY = {"fastembed": ("engram.embedders_ext", "make_fastembed"),
+         "openai": ("engram.embedders_remote", "make_openai")}
 _SCHEMES = {}          # scheme -> factory(arg) -> Embedder (register_scheme(); tests, plugins)
 RETRY_S = 300.0        # library mode: after a failed load, no retry before this many seconds
 EMBED_TIMEOUT = 1.0    # daemon mode: seconds one embedding call may take (ENGRAM_EMBEDDER_TIMEOUT)
@@ -309,21 +309,30 @@ def parse_spec(spec):
     return scheme, arg.strip()
 
 
-def _log_once(kind, spec, exc=None):
+def _safe_spec(spec):
+    """The spec for log lines: printable, bounded (it is operator input, never a secret path)."""
+    return "".join(c for c in str(spec)[:80] if c.isprintable())
+
+
+def _log_once(kind, spec, exc=None, detail=None):
     """One stderr line per process per failure kind. Never carries memory text: only the
-    spec, the kind and the exception CLASS name (messages can echo inputs)."""
+    spec, the kind, the exception CLASS name (messages can echo inputs) and `detail`, a fixed
+    string chosen by our own code (for example 'remote not acknowledged')."""
     with _lock:
         if kind in _logged:
             return
         _logged.add(kind)
     extra = ""
-    if kind == "unavailable":
+    if detail:
+        extra = "; " + detail
+    elif kind == "unavailable":
         extra = "; install the optional package (pip install 'engram-memory[local]')"
     elif kind == "unknown":
-        extra = "; valid: hash, fastembed:<model>"
+        extra = "; valid: hash, fastembed:<model>, openai:<model>"
     try:
         sys.stderr.write("engram: embedder %s failed (%s%s); using the hashed embedder instead%s\n"
-                         % (spec, kind, " " + type(exc).__name__ if exc is not None else "", extra))
+                         % (_safe_spec(spec), kind,
+                            " " + type(exc).__name__ if exc is not None else "", extra))
         sys.stderr.flush()
     except Exception:
         pass
@@ -411,7 +420,11 @@ def _fail_load(e, kind=None):
     kind = kind or _classify(e)
     _load_failures += 1
     _state, _failing, _loader = "failed", True, None
-    _reason = "%s %s" % (kind, type(e).__name__ if e is not None else "")
+    detail = getattr(e, "detail", None)
+    if isinstance(detail, str) and detail:
+        _reason = "%s: %s" % (kind, detail)     # a fixed string from our own code
+    else:
+        _reason = "%s %s" % (kind, type(e).__name__ if e is not None else "")
     back = min(COOLDOWN_MIN * (2 ** (_load_failures - 1)), COOLDOWN_MAX)
     _retry_at = time.monotonic() + (back if _async else RETRY_S)
     return kind
@@ -443,7 +456,8 @@ def _load_main(token):
         else:
             _inst, _state, _failing, _reason, _load_failures = inst, "ready", False, None, 0
     if kind:
-        _log_once(kind, _spec, None if isinstance(err, _Bad) else err)
+        _log_once(kind, _spec, None if isinstance(err, _Bad) else err,
+                  getattr(err, "detail", None))
 
 
 def _tick():
@@ -488,7 +502,7 @@ def _current():
         except Exception as e:
             exc = e
             kind = _fail_load(e)
-    _log_once(kind, _spec, None if isinstance(exc, _Bad) else exc)
+    _log_once(kind, _spec, None if isinstance(exc, _Bad) else exc, getattr(exc, "detail", None))
     return None
 
 
@@ -796,8 +810,26 @@ def tuning(embedder_id, name, default):
     return default
 
 
+def _remote_status():
+    """Extra status keys when the configured embedder sends text to an HTTP endpoint. The
+    adapter module is imported only when the spec names it, never on the default path."""
+    if not _spec.lower().startswith("openai:"):
+        return {}
+    try:
+        from engram import embedders_remote  # noqa: PLC0415
+        return embedders_remote.remote_status(_spec)
+    except Exception:
+        return {"embedder_remote": True, "embedder_remote_host": None}
+
+
 def status():
     """Plain dict for `mnemo status` / `engram_status`. Never loads a model or blocks."""
+    d = _status()
+    d.update(_remote_status())
+    return d
+
+
+def _status():
     if _async:
         _tick()
     with _lock:

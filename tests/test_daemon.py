@@ -125,7 +125,8 @@ class VerbTests(unittest.TestCase):
             self.assertIs(r.get("ok"), False, (verb, p, r))
             self.assertIn("error", r)
             self.assertNotIn("Traceback", json.dumps(r))
-        self.assertEqual(self.d.call("reembed")["error"], "unsupported")
+        self.assertIn("action", self.d.call("reembed")["error"])
+        self.assertEqual(self.d.call("pending")["error"], "unsupported")
         self.assertTrue(self.d.call("ping")["ok"])
 
     def test_non_object_and_garbage_requests(self):
