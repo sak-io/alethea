@@ -168,7 +168,6 @@ class ConsentAndConfig(AdapterBase):
             er.make_openai(MODEL)
         self.assertEqual(cm.exception.kind, "tls")
         self.assertEqual(tls.count(), 0)     # the TLS handshake failed: no HTTP request, no key
-        self.assertNotIn(b"verify", json.dumps(vars(er)).encode() if False else b"")
 
     def test_there_is_no_way_to_disable_certificate_verification(self):
         src = open(er.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
