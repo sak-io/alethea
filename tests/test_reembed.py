@@ -302,6 +302,46 @@ class Progress(Base):
         d.reembed("cancel")
 
 
+class CancelAndHost(Base):
+    def test_cancel_during_embedding_writes_nothing(self):
+        d = self.remote(self.hashed_store(6, identity=False))
+        real = vectorize.embed_batch
+
+        def embed_then_cancel(texts, eid=None):
+            out = real(texts, eid)
+            d.engram.reembed._stop.set()       # cancel lands after the embed, before the write
+            return out
+        with mock.patch.object(reembed.vectorize, "embed_batch", embed_then_cancel):
+            d.reembed("start", confirm=True, batch=3)
+            self.assertTrue(d.wait_state(("cancelled",)), d.reembed("status"))
+        self.assertEqual(d.reembed("status")["reembed"]["done"], 0)
+        self.assertEqual({e for e, _ in d.ids()}, {HASH_ID})
+
+    def test_host_change_on_resume_pauses_and_needs_a_fresh_yes(self):
+        home = self.hashed_store(10, identity=False)
+        d = self.remote(home)
+        self.stub.delay = 0.3
+        d.reembed("start", confirm=True, batch=2)
+        self.assertTrue(wait_for(lambda: d.reembed("status")["reembed"]["done"] > 0, 10))
+        d.stop()                                   # shutdown mid-run: persisted state stays running
+        other = Stub()
+        self.addCleanup(other.stop)
+        d = RDaemon(remote_env(other), home=home)  # same model and dimension, different host
+        self.daemons.append(d)
+        self.assertTrue(d.wait_state(("paused",), 10), d.reembed("status"))
+        st = d.reembed("status")["reembed"]
+        self.assertIn("host changed", st["last_error"])
+        self.assertIn("127.0.0.1:%d" % other.port, st["last_error"])
+        self.assertEqual(other.inputs, ["dimension probe"])    # no memory text sent to the new host
+        self.assertNotIn(KEY, json.dumps(st))
+        r = d.reembed("start")                     # without confirmation: refused
+        self.assertFalse(r["ok"])
+        self.assertTrue(d.reembed("start", confirm=True)["ok"])    # fresh, confirmed run
+        self.assertTrue(d.wait_state(("done",), 20), d.reembed("status"))
+        self.assertGreater(len(other.inputs), 0)
+        self.assertEqual({e for e, _ in d.ids()}, {OPENAI_ID})
+
+
 class KillNineResume(unittest.TestCase):
     def test_kill_minus_nine_mid_run_resumes_on_restart(self):
         stub = Stub()

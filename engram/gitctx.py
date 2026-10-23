@@ -14,6 +14,18 @@ _lock = threading.Lock()
 _clock = time.monotonic
 
 
+SECRET_ENV = ("ENGRAM_EMBEDDER_API_KEY", "ENGRAM_LLM_API_KEY", "ENGRAM_TOKEN")
+
+
+def scrubbed_env(env=None):
+    """Copy of the environment without Engram's credentials, for child processes (git) that
+    have no use for them: a repo-controlled git hook or config must not see the API key."""
+    e = dict(os.environ if env is None else env)
+    for k in SECRET_ENV:
+        e.pop(k, None)
+    return e
+
+
 def _put(cache, key, value):
     with _lock:
         cache[key] = value
@@ -42,7 +54,7 @@ def _resolve(real):
     out = subprocess.run(
         ["git", "rev-parse", "--is-bare-repository", "--git-common-dir"],
         cwd=real, capture_output=True, text=True, timeout=TIMEOUT,
-        shell=False, stdin=subprocess.DEVNULL,
+        shell=False, stdin=subprocess.DEVNULL, env=scrubbed_env(),
     )
     if out.returncode != 0:
         return None

@@ -35,7 +35,7 @@ MAX_SWEEPS = 3                     # passes over rows skipped by a concurrent ch
 META_KEY = "reembed"
 CHAR_CAP = 8000                    # what the remote adapter sends per memory at most
 _PERSIST = ("state", "target", "cursor", "done", "total", "include_identity", "batch",
-            "started_at", "last_error", "sweeps")
+            "started_at", "last_error", "sweeps", "host")
 
 
 class Reembedder:
@@ -60,7 +60,7 @@ class Reembedder:
             st = {}
         out = {"state": "idle", "target": None, "cursor": 0, "done": 0, "total": 0,
                "include_identity": False, "batch": DEFAULT_BATCH, "started_at": None,
-               "last_error": None, "sweeps": 0}
+               "last_error": None, "sweeps": 0, "host": None}
         if isinstance(st, dict):
             for k in _PERSIST:
                 if k in st:
@@ -177,6 +177,7 @@ class Reembedder:
                 return False, "a reembed run is already in progress"
             st = self.st
             resume = (st["state"] in ("running", "paused") and st["target"] == t["id"]
+                      and st.get("host") == t["host"]
                       and bool(st["include_identity"]) == bool(include_identity))
         if not resume:
             with self.e.lock:
@@ -184,7 +185,7 @@ class Reembedder:
                     "SELECT COUNT(*) FROM memories WHERE " + self._where(include_identity),
                     (t["id"],)).fetchone()[0]
             with self._m:
-                self.st.update(target=t["id"], cursor=0, done=0, total=total,
+                self.st.update(target=t["id"], host=t["host"], cursor=0, done=0, total=total,
                                started_at=time.time(), sweeps=0)
         with self._m:
             self.st.update(state="running", include_identity=bool(include_identity),
@@ -285,6 +286,16 @@ class Reembedder:
                                    last_error="configured embedder changed; run reembed again")
                 self._persist()
                 return
+            with self._m:
+                was_host = self.st.get("host")
+            if was_host != t["host"]:
+                # consent was given for another endpoint: never send there without a fresh --yes
+                with self._m:
+                    self.st.update(state="paused", last_error=(
+                        "embedder host changed (was %s, now %s); run `mnemo reembed --yes` again "
+                        "to confirm the new host" % (was_host or "local", t["host"] or "local")))
+                self._persist()
+                return
             with self.e.lock:
                 rows = self.e.cortex.db.execute(
                     "SELECT rowid, id, content, embedder_id FROM memories WHERE rowid>? AND "
@@ -307,6 +318,8 @@ class Reembedder:
                 return
             texts = [r[2] for r in rows]
             used, vecs = vectorize.embed_batch(texts, want)      # NO engine lock held
+            if stop.is_set():
+                continue                     # cancelled while embedding: write nothing
             if used != want or len(vecs) != len(rows):
                 s = vectorize.status()
                 if self._fail(stop, "embedding failed: %s" % (s.get("embedder_reason")

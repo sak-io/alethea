@@ -509,6 +509,28 @@ class SubprocessDaemon(unittest.TestCase):
         shutil.rmtree(home, ignore_errors=True)
 
 
+class ChildProcessesDoNotSeeCredentials(unittest.TestCase):
+    def test_vcs_subprocesses_get_a_scrubbed_environment(self):
+        from engram import gitctx, install
+        seen = []
+
+        def fake_run(cmd, **kw):
+            seen.append((cmd[0], kw.get("env")))
+            return subprocess.CompletedProcess(cmd, 1, "", "")
+        creds = {"ENGRAM_EMBEDDER_API_KEY": KEY, "ENGRAM_LLM_API_KEY": "llm-" + KEY,
+                 "ENGRAM_TOKEN": "t" * 20, "PATH": os.environ.get("PATH", "")}
+        with mock.patch.dict(os.environ, creds), mock.patch("subprocess.run", fake_run):
+            gitctx.cache_clear()
+            gitctx._resolve(tempfile.gettempdir())
+            install.git_toplevel(tempfile.gettempdir())
+        self.assertEqual(len(seen), 2)
+        for _c, env in seen:
+            self.assertIsNotNone(env)
+            for k in ("ENGRAM_EMBEDDER_API_KEY", "ENGRAM_LLM_API_KEY", "ENGRAM_TOKEN"):
+                self.assertNotIn(k, env)
+            self.assertIn("PATH", env)
+
+
 class DefaultPathStaysClean(unittest.TestCase):
     def test_nothing_remote_is_imported_or_started_by_default(self):
         home = make_home()

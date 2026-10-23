@@ -27,6 +27,7 @@ import stat
 import subprocess
 import sys
 
+from engram import gitctx
 from engram.export import Refused, _open_dir
 
 HOOK_MODULE = "engram.hooks.engram_hook"
@@ -197,7 +198,8 @@ def owned_interpreters(settings):
 def git_toplevel(cwd):
     try:
         p = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd, capture_output=True,
-                           text=True, timeout=5, stdin=subprocess.DEVNULL)
+                           text=True, timeout=5, stdin=subprocess.DEVNULL,
+                           env=gitctx.scrubbed_env())
     except (OSError, subprocess.SubprocessError):
         return None
     top = p.stdout.strip()

@@ -108,8 +108,9 @@ def build_parser():
             s.add_argument("--mcp", action="store_true",
                            help="also register the MCP server with `claude mcp add`")
     s = add("reembed", "re-embed stored vectors under the configured embedder (resumable, "
-                       "background). A REMOTE embedder sends memory text to a third party: "
-                       "without --yes this only shows what would be sent")
+                       "background). Only a REMOTE target (openai:) needs --yes, because it sends "
+                       "memory text to another host; without --yes it only shows what would be "
+                       "sent. A local target (hash, fastembed) starts immediately, no --yes")
     s.add_argument("--dry-run", action="store_true", help="show what would be re-embedded; send nothing")
     s.add_argument("--yes", action="store_true",
                    help="confirm sending memory text to the remote host and start (required "
