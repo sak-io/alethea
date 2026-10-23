@@ -182,9 +182,8 @@ class Adapter:
     # -- transport ---------------------------------------------------------------------
 
     def _http(self, user):
-        handlers = [_NoRedirect()]
-        if self.loopback:  # never route local traffic through an environment proxy
-            handlers.append(urllib.request.ProxyHandler({}))
+        # never route the key through an environment-chosen proxy (same rule as embedders_remote)
+        handlers = [_NoRedirect(), urllib.request.ProxyHandler({})]
         opener = urllib.request.build_opener(*handlers)
         req = urllib.request.Request(self.url, data=self._body(user), headers=self._headers(),
                                      method="POST")

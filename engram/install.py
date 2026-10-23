@@ -448,7 +448,7 @@ def register_mcp(scope, out, err):
         return 0
     try:
         p = subprocess.run([exe] + cmd[1:], capture_output=True, text=True, timeout=MCP_TIMEOUT_S,
-                           stdin=subprocess.DEVNULL)
+                           stdin=subprocess.DEVNULL, env=gitctx.scrubbed_env())
     except (OSError, subprocess.SubprocessError) as e:
         err("could not run `claude mcp add`: %s" % type(e).__name__)
         out("run it yourself: " + " ".join(_quote(c) for c in cmd))
