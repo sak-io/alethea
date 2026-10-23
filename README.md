@@ -11,7 +11,7 @@ Each AI session keeps its own context window. Engram is the layer that survives 
 
 Built and tested: the core engine (storage, encode gate and dedup, recall, activation and decay, consolidation and sleep cycle, redaction), the daemon (Unix socket, optional token-authenticated TCP), the fail-soft client, the stdio MCP server and the `mnemo` CLI.
 
-Claude Code hooks (T22), the Claude Code installer and packaging (part of T30) and `export-rules` sync-back (T24) are built. Not yet built: `reembed`, and the optional plugins (learned embedder, LLM-assisted consolidation). Recall uses a hashed n-gram embedder, so paraphrases that share no words with a memory can miss.
+Claude Code hooks (T22), the Claude Code installer and packaging (part of T30) and `export-rules` sync-back (T24) are built. Not yet built: `reembed` and the remote embedder (T26), LLM-assisted consolidation. Recall uses a hashed n-gram embedder by default, so paraphrases that share no words with a memory can miss. An optional local embedder (`pip install 'engram-memory[local]'`, `ENGRAM_EMBEDDER=fastembed:sentence-transformers/all-MiniLM-L6-v2`, runs on-device) is wired in and fail-soft, but its real-model path is verified only up to the package import and with stubbed embeddings, and its cosine distributions are unmeasured, so it ships with the conservative hashed thresholds; see `docs/configuration.md`.
 
 ## Requirements
 

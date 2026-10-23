@@ -11,6 +11,8 @@ MAX_REQUEST_BYTES = 1 << 20
 DEFAULTS = {
     "ENGRAM_HOME": "~/.engram",
     "ENGRAM_EMBEDDER": "hash",
+    "ENGRAM_EMBEDDER_LOAD_TIMEOUT": 120,   # seconds the model may take to load (background)
+    "ENGRAM_EMBEDDER_TIMEOUT": "1.0",      # seconds one embedding call may take (float)
     "ENGRAM_SLEEP_INTERVAL": 900,
     "ENGRAM_IDLE_SLEEP": 180,
     "ENGRAM_LLM_CONSOLIDATE": False,

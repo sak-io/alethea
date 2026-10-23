@@ -101,12 +101,25 @@ def _sigmoid(x):
     return e / (1.0 + e)
 
 
-def candidates(cortex, cue, pool=POOL, embedder_id=vectorize.EMBEDDER_ID, relevance_floor=True,
-               fts_window=None):
+def embed_cue(cue, relevance_floor=True, embedder_id=None):
+    """(embedder_id_used, [cue vector] or [cue vector, core vector]) for `candidates(embedded=)`.
+    Bounded and fail-soft; call it BEFORE taking the engine lock."""
+    cue = _cap(cue)
+    if not cue.strip():
+        return None
+    core = " ".join(t for t in vectorize.tokenize(cue) if t not in STOPWORDS)
+    use_core = bool(relevance_floor and core and core != " ".join(vectorize.tokenize(cue)))
+    return vectorize.embed_batch([cue, core] if use_core else [cue], embedder_id)
+
+
+def candidates(cortex, cue, pool=POOL, embedder_id=None, relevance_floor=True,
+               fts_window=None, embedded=None):
     """Fused, scored active memories (dicts + lex/sem/relevance/score), best first.
 
     No reinforcement. Vector channel: only rows with the same embedder_id among the
-    max(pool*4, 600) most recently touched; FTS covers the whole corpus. `relevance_floor=False`
+    max(pool*4, 600) most recently touched; FTS covers the whole corpus. `embedder_id` None =
+    the configured embedder (hashed if it is unavailable); rows stored under any other id are
+    reachable through the lexical channel only (never an error, never compared). `relevance_floor=False`
     disables the semantic-only relevance floor (encode's novelty/dedup wants every neighbour).
     `fts_window=N` limits the FTS channel to the N newest rows (the write path uses it:
     FTS ranking is O(corpus) on word-overlapping text); None = whole corpus (recall).
@@ -127,11 +140,21 @@ def candidates(cortex, cue, pool=POOL, embedder_id=vectorize.EMBEDDER_ID, releva
         for i, mid in enumerate(active):
             lex[mid] = 1.0 - i / n
     sem = {}
+    core = " ".join(t for t in vectorize.tokenize(cue) if t not in STOPWORDS)
+    use_core = bool(relevance_floor and core and core != " ".join(vectorize.tokenize(cue)))
+    # One embedder for the whole call (the configured one, or hashed after a failure).
+    if embedded is not None:  # precomputed by embed_cue() outside the lock
+        embedder_id, qvs = embedded[0], list(embedded[1])
+        use_core = use_core and len(qvs) > 1
+    else:
+        embedder_id, qvs = vectorize.embed_batch([cue, core] if use_core else [cue], embedder_id)
+    qv = qvs[0]
+    sem_gain = vectorize.tuning(embedder_id, "SEM_GAIN", SEM_GAIN)
+    sem_min = vectorize.tuning(embedder_id, "SEM_MIN_COS", SEM_MIN_COS)
     rows = cortex.db.execute(
         "SELECT id, vector FROM memories WHERE status='active' AND embedder_id=? "
         "AND vector IS NOT NULL ORDER BY last_access DESC, rowid DESC LIMIT ?",
         (embedder_id, max(pool * 4, VECTOR_WINDOW_MIN))).fetchall()
-    qv = vectorize.embed(cue)
     vecs = [r["vector"] for r in rows]
     for r, s in zip(rows, vectorize.cosine_many(qv, vecs)):
         if s > 0:
@@ -140,17 +163,15 @@ def candidates(cortex, cue, pool=POOL, embedder_id=vectorize.EMBEDDER_ID, releva
     # against unrelated text, which is function-word noise, not meaning.
     sem_floor = {}
     if relevance_floor:
-        core = " ".join(t for t in vectorize.tokenize(cue) if t not in STOPWORDS)
-        if core and core != " ".join(vectorize.tokenize(cue)):
-            sem_floor = {r["id"]: s for r, s in zip(rows, vectorize.cosine_many(
-                vectorize.embed(core), vecs))}
+        if use_core:
+            sem_floor = {r["id"]: s for r, s in zip(rows, vectorize.cosine_many(qvs[1], vecs))}
         else:
             sem_floor = sem
     now = cortex.clock()
     # score = rel * f with f in [0.55, 1], so score <= rel: visit ids by descending rel
     # and stop once rel is below the pool-th best score. Exact top-`pool`, but only the
     # few leading ids pay for a row fetch (was one get() per vector hit).
-    rels = {mid: W_LEX * lex.get(mid, 0.0) + W_SEM * min(1.0, sem.get(mid, 0.0) * SEM_GAIN)
+    rels = {mid: W_LEX * lex.get(mid, 0.0) + W_SEM * min(1.0, sem.get(mid, 0.0) * sem_gain)
             for mid in set(lex) | set(sem)}
     out = []
     top = []  # min-heap of the best `pool` scores seen so far
@@ -159,7 +180,7 @@ def candidates(cortex, cue, pool=POOL, embedder_id=vectorize.EMBEDDER_ID, releva
     order = sorted(rels, key=lambda i: (-rels[i], i))
     for idx, mid in enumerate(order):
         rel = rels[mid]
-        sem_ok = (sem_floor.get(mid, 0.0) if relevance_floor else sem.get(mid, 0.0)) >= SEM_MIN_COS
+        sem_ok = (sem_floor.get(mid, 0.0) if relevance_floor else sem.get(mid, 0.0)) >= sem_min
         if relevance_floor and not sem_ok and mid not in lex:
             continue
         if len(out) >= pool and rel < floor:
@@ -230,8 +251,8 @@ def _identity_rows(cortex, k):
     return rows[:k]
 
 
-def recall(cortex, cue, k=K, pool=POOL, reinforce=True, embedder_id=vectorize.EMBEDDER_ID,
-           repo_root=None, cwd=None, scope="all"):
+def recall(cortex, cue, k=K, pool=POOL, reinforce=True, embedder_id=None,
+           repo_root=None, cwd=None, scope="all", embedded=None):
     """Return up to k results, each with `via` in {identity, hit, spread}; reinforce them.
 
     Same-repo hits get a SCOPE_BOOST score multiplier (soft); scope="repo" additionally
@@ -252,7 +273,7 @@ def recall(cortex, cue, k=K, pool=POOL, reinforce=True, embedder_id=vectorize.EM
             m["via"] = "identity"
             seen.add(m["id"])
             results.append(m)
-    hits = candidates(cortex, cue, pool=pool, embedder_id=embedder_id)
+    hits = candidates(cortex, cue, pool=pool, embedder_id=embedder_id, embedded=embedded)
     if repo_root or cwd:
         for m in hits:
             if in_scope(m):

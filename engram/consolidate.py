@@ -13,7 +13,7 @@ import json
 import math
 import time
 
-from engram import encode
+from engram import encode, vectorize
 from engram.config import DOWNSCALE_INTERVAL_S
 from engram.cortex import (ARCHIVE_ACTIVATION, DAY_S, DOWNSCALE_FACTOR,
                            DOWNSCALE_RATE, MIN_STRENGTH)
@@ -138,7 +138,7 @@ def recombine(cortex, lock=None):
     marks = ",".join("?" * len(RECOMBINE_KINDS))
     with _lock(lock):
         rows = cortex.db.execute(
-            "SELECT id, content, embedder_id FROM memories WHERE status='active' "
+            "SELECT id, content, embedder_id, vector FROM memories WHERE status='active' "
             "AND kind IN (%s) ORDER BY salience DESC, id LIMIT ?" % marks,
             (*RECOMBINE_KINDS, RECOMBINE_TOP)).fetchall()
     added = 0
@@ -147,8 +147,14 @@ def recombine(cortex, lock=None):
             break
         if a["embedder_id"] != b["embedder_id"]:
             continue
-        s = encode.similarity(a["content"], b["content"], embedder=a["embedder_id"])
-        if not (RECOMBINE_LO <= s <= RECOMBINE_HI):
+        # STORED vectors only: recombine (sleep) never calls an embedder (ADR 0010).
+        vecs = None
+        if (a["vector"] and b["vector"] and vectorize.is_loaded_id(a["embedder_id"])):
+            vecs = (bytes(a["vector"]), bytes(b["vector"]))
+        s = encode.similarity(a["content"], b["content"], embedder=a["embedder_id"], vectors=vecs)
+        eid = a["embedder_id"]
+        if not (vectorize.tuning(eid, "RECOMBINE_LO", RECOMBINE_LO) <= s
+                <= vectorize.tuning(eid, "RECOMBINE_HI", RECOMBINE_HI)):
             continue
         with _lock(lock):
             if (cortex.edge_weight(a["id"], b["id"], "recombined") is not None
@@ -510,8 +516,9 @@ def consolidate_episodes(cortex, distiller=None, lock=None, limit=None, should_s
                     gist = distiller.distill(turns)
                 except Exception:
                     gist = extract_gist(turns)
+                pre = _preembed(ids, gist)  # embedder calls happen here, outside the lock
                 with _lock(lock):
-                    _write_episode(cortex, ep, ids, gist, out, k_prog)
+                    _write_episode(cortex, ep, ids, gist, out, k_prog, pre)
                     cortex.journal_mark_consolidated(ids)
                     _meta_del(cortex, k_att, k_prog)
             except Exception:
@@ -527,17 +534,29 @@ def _progress(cortex, key):
         return {}
 
 
-def _write_episode(cortex, ep, ids, gist, out, key):
+def _summary_text(ids, gist):
+    return ("Episode (%d turns): " % len(ids) + " ".join(s for s, _ in gist))[:MAX_SUMMARY_CHARS]
+
+
+def _preembed(ids, gist):
+    """{text: encode.embed_for(text)} for the summary and the durable facts of an episode.
+    Bounded and fail-soft (hashed on any embedder problem); never called under the lock."""
+    if not gist:
+        return {}
+    texts = [_summary_text(ids, gist)] + [s for s, d in gist if d >= encode.OBSERVE_DURABILITY]
+    return {t: encode.embed_for(t) for t in texts}
+
+
+def _write_episode(cortex, ep, ids, gist, out, key, pre=None):
     if not gist:
         return
     prog = _progress(cortex, key)  # {"eid": id, "done": [indexes of finished facts]}
     common = dict(session_id=ep["session_id"], cwd=ep["cwd"], repo_root=ep["repo_root"])
     eid = prog.get("eid")
     if eid is None:
-        text = ("Episode (%d turns): " % len(ids)
-                + " ".join(s for s, _ in gist))[:MAX_SUMMARY_CHARS]
+        text = _summary_text(ids, gist)
         res = encode.encode(
-            cortex, text, kind="episodic", force=True,
+            cortex, text, kind="episodic", force=True, embedded=(pre or {}).get(text),
             meta={"episode": {"turns": len(ids), "start": ep["start"], "end": ep["end"],
                               "first_journal_id": ids[0], "last_journal_id": ids[-1]}},
             **common)
@@ -552,7 +571,8 @@ def _write_episode(cortex, ep, ids, gist, out, key):
         if d < encode.OBSERVE_DURABILITY or i in prog["done"]:
             continue
         kind = encode.classify(s)
-        r = encode.encode(cortex, s, kind="semantic" if kind == "episodic" else kind, **common)
+        r = encode.encode(cortex, s, kind="semantic" if kind == "episodic" else kind,
+                          embedded=(pre or {}).get(s), **common)
         if r["status"] in ("created", "reinforced") and r["id"] != eid:
             if r["status"] == "created":
                 out["facts"] += 1

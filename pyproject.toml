@@ -27,6 +27,9 @@ classifiers = [
     "Topic :: Software Development",
 ]
 
+[project.optional-dependencies]
+local = ["fastembed>=0.3"]  # opt-in local ONNX embedder (ENGRAM_EMBEDDER=fastembed:<model>)
+
 [project.urls]
 Repository = "https://github.com/sak-io/engram"
 

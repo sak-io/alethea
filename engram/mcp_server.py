@@ -136,6 +136,12 @@ def render_recall(results):
 def render_status(r):
     parts = ["memory online", "total=%s" % r.get("total"),
              "pending=%s" % r.get("journal_pending"), "embedder=%s" % r.get("embedder_id")]
+    if r.get("embedder_configured") not in (None, "hash"):
+        parts += ["embedder_configured=%s" % r.get("embedder_configured"),
+                  "embedder_state=%s" % r.get("embedder_state"),
+                  "falling_back=%s" % bool(r.get("embedder_falling_back")),
+                  "fallbacks=%s" % r.get("embedder_fallbacks"),
+                  "reason=%s" % r.get("embedder_reason")]
     return _plain(" ".join(parts), 500)
 
 

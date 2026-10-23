@@ -197,6 +197,9 @@ class Engram:
         self.home = ensure_private_dir(home or home_dir(self.env))
         cfg = load_config(self.env, self.home)
         warn_reserved(cfg)
+        vectorize.configure(cfg["ENGRAM_EMBEDDER"], quiet=True, background=True,
+                            load_timeout=cfg["ENGRAM_EMBEDDER_LOAD_TIMEOUT"],
+                            embed_timeout=cfg["ENGRAM_EMBEDDER_TIMEOUT"])  # lazy: nothing optional is imported yet
         self.sleep_interval = max(0, cfg["ENGRAM_SLEEP_INTERVAL"])
         self.idle_sleep = max(0, cfg["ENGRAM_IDLE_SLEEP"])
         self.clock, self.mono = clock, mono
@@ -265,8 +268,10 @@ class Engram:
         if meta is not None and not isinstance(meta, dict):
             raise BadRequest("meta must be an object")
         kw = self._write_kw(p)
+        emb = encode.embed_for(content)  # before the lock: an embedder is never called under it
         with self.lock:
-            r = encode.remember(self.cortex, content, kind=kind, salience=sal, meta=meta, **kw)
+            r = encode.remember(self.cortex, content, kind=kind, salience=sal, meta=meta,
+                                embedded=emb, **kw)
         return dict(r, ok=True)
 
     def v_reflect(self, p):
@@ -276,18 +281,20 @@ class Engram:
                 or not all(isinstance(c, str) and len(c) <= 128 for c in cited)):
             raise BadRequest("cited_ids must be a list of at most 50 id strings")
         kw = self._write_kw(p)
+        emb = encode.embed_for(content)
         with self.lock:
-            r = encode.reflect(self.cortex, content, cited_ids=cited, **kw)
+            r = encode.reflect(self.cortex, content, cited_ids=cited, embedded=emb, **kw)
         return dict(r, ok=True)
 
     def v_observe(self, p):
         content = _str(p, "content", True, MAX_CONTENT_CHARS)
         kw = self._write_kw(p)
         role = _str(p, "role", maxlen=64)
+        emb = encode.embed_for(content) if encode.would_promote(content) else None
         with self.lock:
             if kw["session_id"]:
                 self.cortex.session_start(kw["session_id"], kw["cwd"], kw["repo_root"])
-            r = encode.observe(self.cortex, content, role=role, **kw)
+            r = encode.observe(self.cortex, content, role=role, embedded=emb, **kw)
         return {"ok": True, "journal_id": r["journal_id"], "promoted": r["promoted"]}
 
     def v_recall(self, p):
@@ -297,9 +304,10 @@ class Engram:
         if scope not in recall.SCOPES:
             raise BadRequest("scope must be one of: all, repo")
         root, cwd = self._scope(p)
+        emb = recall.embed_cue(cue)  # before the lock
         with self.lock:
             res = recall.recall(self.cortex, cue, k=k, reinforce=_bool(p, "reinforce", True),
-                                repo_root=root, cwd=cwd, scope=scope)
+                                repo_root=root, cwd=cwd, scope=scope, embedded=emb)
         return {"ok": True, "results": [_public(m) for m in res]}
 
     def v_briefing(self, p):
@@ -392,7 +400,7 @@ class Engram:
         except ValueError:
             last = None
         return {"ok": True, "version": __version__, "schema_version": schema,
-                "embedder_id": vectorize.EMBEDDER_ID, "fts": self.cortex.fts_available,
+                **vectorize.status(), "fts": self.cortex.fts_available,
                 "counts": counts, "total": sum(sum(v.values()) for v in counts.values()),
                 "journal_pending": pending, "dedup": dedup, "last_sleep": last, "pid": os.getpid(),
                 "uptime_s": round(self.mono() - self.started, 1),
@@ -858,13 +866,15 @@ _reserved_warned = False
 
 
 def warn_reserved(cfg):
-    """One stderr line (once per process) if a reserved, not-yet-implemented option is set."""
+    """One stderr line (once per process) if an unknown embedder or a reserved option is set."""
     global _reserved_warned
     if _reserved_warned:
         return
     bad = []
-    if str(cfg.get("ENGRAM_EMBEDDER", "hash")).strip().lower() != "hash":
-        bad.append("ENGRAM_EMBEDDER=%s (only the built-in hash embedder exists)"
+    try:
+        vectorize.parse_spec(cfg.get("ENGRAM_EMBEDDER", "hash"))
+    except vectorize.UnknownEmbedder:
+        bad.append("ENGRAM_EMBEDDER=%s (unknown embedder; valid: hash, fastembed:<model>)"
                    % cfg["ENGRAM_EMBEDDER"])
     if cfg.get("ENGRAM_LLM_CONSOLIDATE"):
         bad.append("ENGRAM_LLM_CONSOLIDATE (no LLM consolidation exists; the daemon ignores it)")
