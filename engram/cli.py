@@ -107,7 +107,19 @@ def build_parser():
                            help="show where hooks are installed (all scopes unless --scope)")
             s.add_argument("--mcp", action="store_true",
                            help="also register the MCP server with `claude mcp add`")
-    add("reembed", "re-embed stored vectors (not yet available)")
+    s = add("reembed", "re-embed stored vectors under the configured embedder (resumable, "
+                       "background). Only a REMOTE target (openai:) needs --yes, because it sends "
+                       "memory text to another host; without --yes it only shows what would be "
+                       "sent. A local target (hash, fastembed) starts immediately, no --yes")
+    s.add_argument("--dry-run", action="store_true", help="show what would be re-embedded; send nothing")
+    s.add_argument("--yes", action="store_true",
+                   help="confirm sending memory text to the remote host and start (required "
+                        "for a remote embedder when not asked interactively)")
+    s.add_argument("--status", action="store_true", help="show progress of the current/last run")
+    s.add_argument("--cancel", action="store_true", help="stop the current run")
+    s.add_argument("--batch", type=_pos_int, default=None, help="memories per batch (default 32, max 64)")
+    s.add_argument("--include-identity", action="store_true",
+                   help="also re-embed IDENTITY memories (skipped by default: the most personal)")
     return p
 
 
@@ -190,6 +202,12 @@ def _fmt_status(r):
                 dist.get("daily_cap"), "OPEN" if (dist.get("breaker") or {}).get("open") else "closed"))
         if dist.get("error"):
             _out("distiller: %s" % dist.get("error"))
+    if r.get("embedder_remote"):
+        _out("WARNING: memory text is sent to %s for embedding (model %s; remote embedder%s)" % (
+            r.get("embedder_remote_host") or "an unknown host", r.get("embedder_remote_model") or "?",
+            "; currently falling back to hashed, nothing is sent" if r.get("embedder_falling_back")
+            else ""))
+    _fmt_reembed_line(r.get("reembed"))
     ls = r.get("last_sleep")
     _out("last sleep: %s" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ls))
                              if ls else "never"))
@@ -202,6 +220,17 @@ def _fmt_status(r):
     for kind in sorted(r.get("counts") or {}):
         by = r["counts"][kind]
         _out("  %-10s %s" % (kind, "  ".join("%s=%s" % (k, by[k]) for k in sorted(by))))
+
+
+def _fmt_reembed_line(re_):
+    if not re_ or re_.get("state") in (None, "idle"):
+        return
+    extra = ""
+    if re_.get("rate_per_s"):
+        extra = "   %s/s   eta %ss" % (re_["rate_per_s"], re_.get("eta_s"))
+    _out("reembed: %s %s/%s%s%s" % (re_["state"], re_.get("done"), re_.get("total"), extra,
+                                    "   last error: %s" % re_["last_error"] if re_.get("last_error")
+                                    else ""))
 
 
 def cmd_status(args):
@@ -340,9 +369,77 @@ def cmd_export_rules(args):
     return EXIT_OK
 
 
-def _later(args):
-    _err("%s is not yet available" % args.cmd)
+def _fmt_plan(r, include_identity):
+    n, c = r.get("memories"), r.get("chars")
+    if include_identity and r.get("with_identity"):
+        n, c = r["with_identity"]["memories"], r["with_identity"]["chars"]
+    _out("reembed plan: %s memories (%s characters) to re-embed as %s" % (n, c, r.get("target")))
+    if r.get("remote"):
+        _out("REMOTE embedder: this sends memory text (redacted, at most %s characters each) to "
+             "%s (model %s)" % (r.get("item_char_cap"), r.get("host") or "?", r.get("model") or "?"))
+    if not include_identity and r.get("identity_excluded"):
+        _out("identity memories skipped: %s (pass --include-identity to send them too)"
+             % r["identity_excluded"])
+    return n
+
+
+def _fmt_progress(r):
+    p = r.get("reembed") or {}
+    _out("reembed: %s   %s/%s   rate %s/s   eta %ss   target %s" % (
+        p.get("state"), p.get("done"), p.get("total"), p.get("rate_per_s") or "-",
+        p.get("eta_s") if p.get("eta_s") is not None else "-", p.get("target")))
+    if p.get("last_error"):
+        _out("last error: %s" % p["last_error"])
+
+
+def _refuse(args, msg):
+    _err(msg)
     return EXIT_NA if _strict(args) else EXIT_OK
+
+
+def cmd_reembed(args):
+    modes = [m for m in ("dry_run", "status", "cancel") if getattr(args, m)]
+    if len(modes) > 1 or (modes and args.yes):
+        _err("--dry-run, --status, --cancel and --yes are mutually exclusive")
+        return EXIT_USAGE
+    if args.status or args.cancel:
+        act = "status" if args.status else "cancel"
+        return _finish(client.cli_call("reembed", {"action": act}), args, _fmt_progress)
+    plan = client.cli_call("reembed", {"action": "plan"})
+    if plan.get("offline") or not plan.get("ok"):
+        return _finish(plan, args, lambda r: None)
+    if not plan.get("ready"):
+        if args.json:
+            _out(json.dumps(plan, sort_keys=True))
+        return _refuse(args, "embedder not ready: %s" % (plan.get("reason") or "unknown"))
+    if args.json and args.dry_run:
+        _out(json.dumps(plan, sort_keys=True))
+        return EXIT_OK
+    if not args.json:
+        n = _fmt_plan(plan, args.include_identity)
+    else:
+        n = (plan.get("with_identity") or plan)["memories"] if args.include_identity \
+            else plan.get("memories")
+    if args.dry_run:
+        return EXIT_OK
+    if not n:
+        if not args.json:
+            _out("nothing to re-embed")
+        return EXIT_OK
+    confirm = args.yes
+    if plan.get("remote") and not confirm:
+        if sys.stdin.isatty() and sys.stderr.isatty():
+            sys.stderr.write("Send this memory text to %s? [y/N] " % (plan.get("host") or "the remote host"))
+            sys.stderr.flush()
+            confirm = sys.stdin.readline().strip().lower() in ("y", "yes")
+        if not confirm:
+            return _refuse(args, "not started: pass --yes to send memory text to %s "
+                                 "(nothing was sent)" % (plan.get("host") or "the remote host"))
+    p = {"action": "start", "confirm": bool(confirm), "include_identity": bool(args.include_identity)}
+    if args.batch:
+        p["batch"] = args.batch
+    return _finish(client.cli_call("reembed", p), args, lambda r: (
+        _out("reembed started in the background; follow it with `mnemo reembed --status`")))
 
 
 def cmd_install(args):
@@ -352,7 +449,7 @@ def cmd_install(args):
 
 COMMANDS = {"install": cmd_install, "uninstall": cmd_install, "status": cmd_status, "up": cmd_up, "sleep": cmd_sleep, "recall": cmd_recall,
             "remember": cmd_remember, "forget": cmd_forget, "dump": cmd_dump,
-            "export-rules": cmd_export_rules, "reembed": _later}
+            "export-rules": cmd_export_rules, "reembed": cmd_reembed}
 
 
 def main(argv=None):

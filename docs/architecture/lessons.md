@@ -70,3 +70,12 @@ The 2000-row FTS window in the dedup path is a deliberate, owner-accepted trade-
 - The briefing had no reinforcement floor (only export did); `encode.withheld` now closes that for model-written memories.
 - The gate scores salience by marker words, so plain procedures and open issues are often dropped (salience 0); such episodes fall back to extractive after the TTL. Quality unmeasured; no real model or provider was contacted (stubs only).
 - Remote-call template again (lesson T25): idle cycle only, no lock, total timeout in a worker thread, breaker, persisted daily cap, strict parse, no redirects, key from env only.
+
+## Remote embedder (T26)
+- Text leaves the machine only through `embedders_remote.prepare()` inside the adapter; do not add a second path to the network, and do not rely on callers redacting. Redact BEFORE capping (a cut inside a secret leaves a prefix no pattern matches).
+- `recall.embed_cue` used to embed the raw cue (a secret typed into a query would have been embedded). It now redacts, which also makes cue vectors match the stored redacted text.
+- Consent is checked before any socket is created; the not-acknowledged path is tested with the connection classes patched to fail if touched.
+- A remote call times out as a whole (deadline across connect/TLS/read), not per socket operation, otherwise a dribbling server holds the worker. The requester also waits at most `ENGRAM_EMBEDDER_TIMEOUT`, so a recall during an outage costs up to that timeout before hashed (until the breaker opens).
+- Reembed never stores a vector under an id that did not produce it: a batch answered by the hashed fallback is a failure, not a write. The recovery probe of the breaker only runs when something embeds; `reembed` nudges it once with a constant string.
+- Not covered: DNS resolution is not bounded by socket timeouts (the worker thread bounds the requester); HTTP(S)_PROXY is deliberately ignored, so users behind a mandatory proxy cannot use the adapter; archived/suppressed rows are not migrated.
+

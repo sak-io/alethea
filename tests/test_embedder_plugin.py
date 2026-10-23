@@ -72,7 +72,7 @@ class SpecParsingTest(Isolated):
         self.assertEqual(vectorize.parse_spec("FastEmbed:Some/Model")[1], "Some/Model")
 
     def test_unknown_values_raise(self):
-        for bad in ("bert", "openai", "openai:text-embedding-3-small", "fastembed", "fastembed:", ":x"):
+        for bad in ("bert", "openai", "bert:small", "fastembed", "fastembed:", ":x"):
             with self.subTest(bad=bad), self.assertRaises(vectorize.UnknownEmbedder):
                 vectorize.parse_spec(bad)
 
@@ -82,7 +82,7 @@ class SpecParsingTest(Isolated):
 
     def test_unknown_embedder_falls_back_with_one_line_and_never_raises(self):
         with self.err() as buf:
-            vectorize.configure("openai:text-embedding-3-small")
+            vectorize.configure("bert:small")
             for _ in range(5):
                 eid, (v,) = vectorize.embed_batch(["hello world"])
         self.assertEqual(eid, vectorize.EMBEDDER_ID)
