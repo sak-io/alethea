@@ -179,6 +179,17 @@ def _fmt_status(r):
         if r.get("embedder_reason") or r.get("embedder_retry_in_s") is not None:
             _out("embedder reason: %s   next retry in: %ss" % (
                 r.get("embedder_reason") or "-", r.get("embedder_retry_in_s")))
+    dist = r.get("distiller") or {}
+    if dist.get("mode") not in (None, "off") or dist.get("error"):
+        age = dist.get("oldest_pending_age_s")
+        _out("distiller: %s   queued: %s   oldest pending: %s" % (
+            dist.get("mode"), dist.get("queue_length"), "-" if age is None else "%ss" % age))
+        if dist.get("notice"):
+            _out("distiller: %s (%s)   calls today: %s/%s   breaker: %s" % (
+                dist.get("notice"), dist.get("provider"), dist.get("calls_today"),
+                dist.get("daily_cap"), "OPEN" if (dist.get("breaker") or {}).get("open") else "closed"))
+        if dist.get("error"):
+            _out("distiller: %s" % dist.get("error"))
     ls = r.get("last_sleep")
     _out("last sleep: %s" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ls))
                              if ls else "never"))

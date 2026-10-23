@@ -328,12 +328,15 @@ def briefing(cortex, repo_root=None, cwd=None, max_bytes=BRIEF_MAX_BYTES):
     REPO_BOOST, unscoped and other-repo stay eligible), recent episodic (<=3, same
     repo/cwd or unscoped). Active only. Returns {"text", "items"}; text <= max_bytes UTF-8.
     """
+    from engram import encode  # deferred (ADR 0002 keeps recall free of an encode import cycle)
     now = cortex.clock()
 
     def active(kinds):
         q = ",".join("?" * len(kinds))
-        return [cortex.get(r["id"]) for r in cortex.db.execute(
+        # model-written memories (T27) are not briefed until reinforced (encode.withheld)
+        mems = [cortex.get(r["id"]) for r in cortex.db.execute(
             "SELECT id FROM memories WHERE status='active' AND kind IN (%s)" % q, kinds)]
+        return [m for m in mems if m is not None and not encode.withheld(m)]
 
     items = [("identity", m) for m in _identity_rows(cortex, BRIEF_IDENTITY)]
     facts = []

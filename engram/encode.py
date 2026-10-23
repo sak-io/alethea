@@ -15,6 +15,10 @@ REINFORCE_STEP = 0.5
 IDENTITY_FLOOR = 0.62
 DELIBERATE_FLOOR = 0.55
 GIST_CHARS = 200
+# Memories whose text came from a model (T27, ADR 0012). They are never `deliberate` and stay
+# out of the SessionStart briefing and the exported rules until reinforced (access_count >= 2).
+UNTRUSTED_SOURCES = ("llm-host", "llm-api")
+PROMOTE_MIN_ACCESS = 2
 # Per-turn input cap in bytes (env ENGRAM_MAX_TURN_BYTES), applied before redact/journal.
 MAX_TURN_BYTES = 256 * 1024
 # Dedup looks for neighbours in the FTS channel among the newest DEDUP_FTS_WINDOW rows only
@@ -379,7 +383,7 @@ def _best_duplicate(cortex, content, embedder_id, vec=None):
 
 def encode(cortex, content, kind=None, salience=None, force=False, deliberate=False,
            session_id=None, cwd=None, repo_root=None, meta=None,
-           embedder_id=None, embedded=None):
+           embedder_id=None, embedded=None, reinforce=True):
     """The encode gate. Returns {"status": "created"|"reinforced"|"rejected", ...}.
 
     Content, gist, keywords and meta are redacted before anything is stored. `embedded` is
@@ -400,7 +404,8 @@ def encode(cortex, content, kind=None, salience=None, force=False, deliberate=Fa
         embedder_id, (vec,) = vectorize.embed_batch([content], embedder_id)
     best, dup = _best_duplicate(cortex, content, embedder_id, vec)
     if dup is not None and best >= threshold(embedder_id):
-        cortex.reinforce(dup["id"], REINFORCE_STEP)
+        if reinforce:  # False: report the merge target but leave it untouched (T27 distiller)
+            cortex.reinforce(dup["id"], REINFORCE_STEP)
         return {"status": "reinforced", "id": dup["id"], "similarity": best}
     surprise = max(0.0, min(1.0, 1.0 - best))
     explicit = salience is not None
@@ -433,6 +438,14 @@ def encode(cortex, content, kind=None, salience=None, force=False, deliberate=Fa
     if capped:
         res["dedup_window_capped"] = window
     return res
+
+
+def withheld(mem):
+    """True for a model-written memory that has not been reinforced yet (not promotable)."""
+    meta = mem.get("meta") or {}
+    return (isinstance(meta, dict) and meta.get("source") in UNTRUSTED_SOURCES
+            and meta.get("deliberate") is not True
+            and mem.get("access_count", 0) < PROMOTE_MIN_ACCESS)
 
 
 def remember(cortex, content, **kw):

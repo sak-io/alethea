@@ -464,7 +464,8 @@ def _meta_del(cortex, *keys):
     cortex.db.commit()
 
 
-def consolidate_episodes(cortex, distiller=None, lock=None, limit=None, should_stop=None):
+def consolidate_episodes(cortex, distiller=None, lock=None, limit=None, should_stop=None,
+                         llm=None):
     """Distil pending journal episodes into an episodic summary + semantic facts.
 
     Everything goes through encode() (redaction, dedup vetoes, thresholds). Journal rows
@@ -474,10 +475,16 @@ def consolidate_episodes(cortex, distiller=None, lock=None, limit=None, should_s
     episode is poisoned and skipped. `should_stop()` is polled between episodes (batches);
     when true the run ends cleanly with the rest still pending. Returns dict(episodes,
     skipped, summaries, facts, errors, poisoned, stopped).
+
+    `llm` (T27, only when ENGRAM_LLM_CONSOLIDATE is on; a `distill.Service`): an episode is
+    queued as pending instead of being written (key `queued` appears in the result) until the
+    host/API distils it or its TTL passes; then it takes the normal extractive path below.
     """
     distiller = distiller or Distiller()
     out = {"episodes": 0, "skipped": 0, "summaries": 0, "facts": 0, "errors": 0,
            "poisoned": 0, "stopped": False}
+    if llm is not None:
+        out["queued"] = 0
     with _lock(lock):
         episodes = replay(cortex, limit)
     for whole in episodes:
@@ -501,6 +508,11 @@ def consolidate_episodes(cortex, distiller=None, lock=None, limit=None, should_s
                         cortex.journal_mark_consolidated(ids)
                         out["skipped"] += 1
                         continue
+                    if llm is not None:
+                        verdict = llm.admit(cortex, ep, ids)
+                        if verdict != "extractive":
+                            out["queued"] += verdict == "queued"
+                            continue
                     try:
                         attempts = int(cortex.meta_get(k_att, "0")) + 1
                     except ValueError:
@@ -521,6 +533,8 @@ def consolidate_episodes(cortex, distiller=None, lock=None, limit=None, should_s
                     _write_episode(cortex, ep, ids, gist, out, k_prog, pre)
                     cortex.journal_mark_consolidated(ids)
                     _meta_del(cortex, k_att, k_prog)
+                    if llm is not None:
+                        llm.release(cortex, tag)
             except Exception:
                 out["errors"] += 1  # rows stay pending: retried (up to MAX_ATTEMPTS)
     return out
@@ -613,7 +627,8 @@ def purge_journal(cortex, now=None, lock=None, keep_sessions=()):
                 marks = ",".join("?" * len(ids))
                 cortex.db.execute("DELETE FROM journal WHERE id IN (%s)" % marks, ids)
                 # episode checkpoints are keyed by the episode's first journal id
-                for pre in ("consol_poison:", "consol_attempts:", "consol_progress:"):
+                for pre in ("consol_poison:", "consol_attempts:", "consol_progress:",
+                            "llm_pending:", "llm_done:"):
                     cortex.db.execute("DELETE FROM engram_meta WHERE key IN (%s)"
                                       % marks, [pre + str(i) for i in ids])
                 cortex.db.commit()
@@ -622,7 +637,8 @@ def purge_journal(cortex, now=None, lock=None, keep_sessions=()):
 
 
 def sleep_cycle(cortex, deep=True, consolidate_only=False, now=None, distiller=None,
-                lock=None, budget_s=None, timer=time.monotonic, keep_sessions=()):
+                lock=None, budget_s=None, timer=time.monotonic, keep_sessions=(),
+                llm=None, llm_api=None):
     """replay+gist -> downscale -> recombine, plus journal purge.
 
     Triggers: timer = defaults; PreCompact = `deep=False` (skips downscale, recombine);
@@ -651,7 +667,9 @@ def sleep_cycle(cortex, deep=True, consolidate_only=False, now=None, distiller=N
         t_now = None
 
     plan = [("consolidate", lambda: consolidate_episodes(
-        cortex, distiller=distiller, lock=lock, should_stop=over))]
+        cortex, distiller=distiller, lock=lock, should_stop=over, llm=llm))]
+    if llm_api is not None:  # direct-API distillation: idle timer cycles only (T27)
+        plan.append(("distill_api", lambda: llm_api(should_stop=over)))
     if not consolidate_only:
         plan.append(("purge", lambda: purge_journal(cortex, t_now, lock=lock,
                                                        keep_sessions=keep_sessions)))
@@ -659,7 +677,7 @@ def sleep_cycle(cortex, deep=True, consolidate_only=False, now=None, distiller=N
             plan.append(("downscale", lambda: downscale(cortex, t_now, lock=lock)))
             plan.append(("recombine", lambda: {"links": recombine(cortex, lock=lock)}))
     for name, fn in plan:
-        if over() and name != "consolidate":
+        if over() and name not in ("consolidate", "distill_api"):
             res["stopped"] = True
             res["stages"][name] = {"skipped": "budget", "ms": 0.0}
             continue

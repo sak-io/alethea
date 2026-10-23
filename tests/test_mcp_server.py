@@ -210,8 +210,10 @@ class RoundTrip(unittest.TestCase):
         m.init()
         names = [t["name"] for t in m.rpc("tools/list")["result"]["tools"]]
         self.assertIn("engram_consolidate_pending", names)
-        text, err = m.tool("engram_consolidate_pending")
-        self.assertEqual((text, err), ("consolidation done", False))
+        self.assertIn("engram_distill_submit", names)
+        text, err = m.tool("engram_consolidate_pending")  # the daemon here has the flag off
+        self.assertFalse(err)
+        self.assertIn("nothing to distil", text)
         m.close()
 
 
