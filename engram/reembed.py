@@ -31,6 +31,8 @@ MAX_BATCH = 64
 PAUSE_S = 0.2                      # sleep between batches (keeps recall/remember latency low)
 FAIL_LIMIT = 5                     # consecutive failed batches before the run pauses
 BACKOFF_S = (0.5, 1.0, 2.0, 4.0, 8.0)
+BUSY_WAIT_S = 0.05                 # the one-slot worker was busy with foreground traffic: retry soon
+BUSY_LIMIT = 400                   # ... at most this many times in a row (about 20 s) before it counts
 MAX_SWEEPS = 3                     # passes over rows skipped by a concurrent change
 META_KEY = "reembed"
 CHAR_CAP = 8000                    # what the remote adapter sends per memory at most
@@ -268,6 +270,7 @@ class Reembedder:
                 pass
 
     def _loop(self, stop):
+        busy = 0
         while not stop.is_set():
             t = self._nudge()
             with self._m:
@@ -322,10 +325,19 @@ class Reembedder:
                 continue                     # cancelled while embedding: write nothing
             if used != want or len(vecs) != len(rows):
                 s = vectorize.status()
+                if len(vecs) == len(rows) and s.get("embedder_state") == "ready" \
+                        and not s.get("embedder_falling_back"):
+                    # Hashed answer from a healthy embedder = its single worker slot was busy
+                    # with a recall/remember. Not a failure: wait a moment and retry.
+                    busy += 1
+                    if busy <= BUSY_LIMIT:
+                        stop.wait(BUSY_WAIT_S)
+                        continue
                 if self._fail(stop, "embedding failed: %s" % (s.get("embedder_reason")
                                                               or "embedder fell back")):
                     return
                 continue
+            busy = 0
             self._write(rows, vecs, want)
             stop.wait(PAUSE_S)
         if self._closing:

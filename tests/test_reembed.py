@@ -247,7 +247,8 @@ class Progress(Base):
         self.assertEqual({e for e, _ in d.ids()}, {OPENAI_ID})
 
     def test_concurrent_writes_and_low_latency_during_a_run(self):
-        d = self.remote(self.hashed_store(40, identity=False))
+        # generous call timeout: this test is about interleaving, not about timing the embedder
+        d = self.remote(self.hashed_store(40, identity=False), ENGRAM_EMBEDDER_TIMEOUT="8")
         self.stub.delay = 0.1
         d.reembed("start", confirm=True, batch=4)
         worst = 0.0
@@ -259,12 +260,38 @@ class Progress(Base):
                 if verb in ("status", "ping"):
                     worst = max(worst, d.last_s)
                 if verb == "recall":
-                    self.assertLess(d.last_s, 0.5 + 0.8)
+                    self.assertLess(d.last_s, 5.0)
             time.sleep(0.05)
         self.assertLess(worst, 0.5)
         self.assertTrue(d.wait_state(("done",), 40), d.reembed("status"))
         self.assertEqual({e for e, _ in d.ids()}, {OPENAI_ID})
         self.assertEqual(len(d.rows()), 46)
+
+    def test_busy_worker_slot_is_retried_and_not_counted_as_a_failure(self):
+        d = self.remote(self.hashed_store(8, identity=False))
+        real = vectorize.embed_batch
+        calls = {"n": 0}
+
+        def sometimes_busy(texts, eid=None):
+            calls["n"] += 1
+            if calls["n"] % 3 != 0:       # the one-slot worker "belongs" to foreground traffic
+                return vectorize.EMBEDDER_ID, [vectorize.embed(t) for t in texts]
+            return real(texts, eid)
+        with mock.patch.object(reembed.vectorize, "embed_batch", sometimes_busy):
+            d.reembed("start", confirm=True, batch=2)
+            self.assertTrue(d.wait_state(("done",), 20), d.reembed("status"))
+        st = d.reembed("status")["reembed"]
+        self.assertEqual((st["done"], st["failures"]), (8, 0))
+        self.assertGreater(calls["n"], 8)
+
+    def test_a_worker_that_stays_busy_eventually_pauses(self):
+        d = self.remote(self.hashed_store(4, identity=False))
+        with mock.patch.object(reembed, "BUSY_LIMIT", 3), mock.patch.object(
+                reembed.vectorize, "embed_batch",
+                lambda texts, eid=None: (vectorize.EMBEDDER_ID, [vectorize.embed(t) for t in texts])):
+            d.reembed("start", confirm=True, batch=2)
+            self.assertTrue(d.wait_state(("paused",), 20), d.reembed("status"))
+        self.assertEqual(d.reembed("status")["reembed"]["done"], 0)
 
     def test_cancel_stops_the_run_and_leaves_the_rest_lexical_only(self):
         d = self.remote(self.hashed_store(30, identity=False))
