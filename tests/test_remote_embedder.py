@@ -29,6 +29,7 @@ OPENAI_ID = "openai:%s:%d" % (MODEL, DIM)
 class AdapterBase(unittest.TestCase):
     def setUp(self):
         vectorize._reset_for_tests()
+        vectorize.EMBED_TIMEOUT = 20.0      # generous: only tests of the deadline itself shrink it
         self.stub = Stub()
         self.addCleanup(self.stub.stop)
         self.addCleanup(er.configure_env, None)
