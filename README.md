@@ -4,7 +4,7 @@ Long-term memory for AI coding agents, modeled on how human memory works.
 
 Each AI session keeps its own context window. Engram is the layer that survives after the session ends: it remembers what mattered, abstracts specifics into durable facts, and lets the rest fade. It is a local daemon with a SQLite store, a command-line tool (`mnemo`) and an MCP server.
 
-- Pure Python standard library plus SQLite. No runtime dependencies, no network calls, no embedding API.
+- Pure Python standard library plus SQLite. No runtime dependencies; by default no network calls and no embedding API (remote embedding and LLM distillation exist but are off and need explicit opt-in).
 - MCP-capable hosts (Claude Code, Cursor, ...) can call the `recall`, `remember`, `reflect`, `forget` and `engram_status` tools voluntarily today. Claude Code hooks ship with the installed package: `mnemo install claude-code` journals prompts and replies and injects a briefing at session start (see `integrations/claude-code/README.md`). This source repo does NOT enable hooks (`docs/adr/0009-hooks-ship-with-the-package.md`), so cloning it never journals your sessions.
 
 ## Status
@@ -20,32 +20,53 @@ Claude Code hooks (T22), the Claude Code installer and packaging (part of T30) a
 
 ## Install
 
+**Not on PyPI yet, and the name `engram-memory` is taken there by an unrelated project** (checked 2026-10-23; see [docs/traction-checklist.md](docs/traction-checklist.md)). Until a name is chosen, install from a checkout or a built wheel:
+
 ```sh
-pipx install engram-memory                                 # PyPI name to be confirmed; NOT published yet
-pipx install git+https://github.com/sak-io/engram          # once this branch is merged to main (or add @<ref> for a specific ref)
-# or: pip install engram-memory / pip install git+https://github.com/sak-io/engram
-mnemo install claude-code                                  # hooks into ~/.claude/settings.json (or $CLAUDE_CONFIG_DIR)
-mnemo install claude-code --mcp                            # also register the MCP server (needs the `claude` CLI)
+git clone https://github.com/sak-io/engram && cd engram     # repository URL not yet verified; see the checklist
+python3 -m pip wheel . --no-deps -w dist                       # builds dist/engram_memory-<version>-py3-none-any.whl
+python3 -m venv .venv && .venv/bin/pip install dist/engram_memory-*.whl
+export PATH="$PWD/.venv/bin:$PATH"                             # puts mnemo, engram-daemon, engram-hook, engram-mcp on PATH
 ```
 
-`mnemo install claude-code --scope local|project` and `--dry-run` (prints a diff) are described in `integrations/claude-code/README.md`. The PyPI distribution name `engram-memory` must be confirmed before any publish; nothing has been published. Upgrade: `pipx upgrade engram-memory` (or reinstall from git) and rerun `mnemo install claude-code` if the interpreter path changed. Uninstall: `mnemo uninstall claude-code`, then `pipx uninstall engram-memory`. Entry points: `mnemo`, `engram-daemon`, `engram-hook`, `engram-mcp`.
+(`pipx install dist/engram_memory-*.whl` works the same way.) The local embedder is an extra: `pip install 'dist/engram_memory-<version>-py3-none-any.whl[local]'`. Upgrade: rebuild and reinstall, then rerun `mnemo install claude-code` if the interpreter path changed. Uninstall: `mnemo uninstall claude-code` (and `mnemo uninstall cursor`), then remove the venv. Entry points: `mnemo`, `engram-daemon`, `engram-hook`, `engram-mcp`.
 
 ## Quick start
 
-From a clone of this repository (no install step). Use a throwaway data directory while trying it out:
+Every command below was run in a clean venv from a built wheel (Python 3.13, Linux). Use a throwaway data directory and, for the last steps, a throwaway repository:
 
 ```sh
 export ENGRAM_HOME=/tmp/engram-demo      # default is ~/.engram
-scripts/mnemo up                          # starts the daemon in the background
-scripts/mnemo remember "We decided to use PostgreSQL for the billing service"
-scripts/mnemo recall "which database for billing"
-scripts/mnemo sleep                       # run a consolidation cycle now
-scripts/mnemo status
-scripts/mnemo dump
-scripts/mnemo export-rules                # write the learned-memory files for this repo
+mnemo up                                  # starts the daemon in the background
+mnemo remember "We decided to use PostgreSQL for the billing service"
+mnemo recall "which database for billing"
+mnemo sleep                               # run a consolidation cycle now
+mnemo status
+mnemo dump
+git init /tmp/engram-demo-repo && cd /tmp/engram-demo-repo
+mnemo export-rules                        # write the learned-memory files for this repo
+mnemo install claude-code --dry-run       # show the hooks diff; nothing is written
+mnemo install --print mcp                 # MCP-only config snippet (see below)
 ```
 
-The daemon keeps running until you stop it: `kill <pid>`, with the pid shown by `mnemo status`. `mnemo` exits 0 when the daemon is down; use `--strict` or `MNEMO_STRICT=1` for non-zero exit codes. `mnemo --help` lists all commands.
+The daemon keeps running until you stop it: `kill <pid>`, with the pid shown by `mnemo status`. `mnemo` exits 0 when the daemon is down; use `--strict` or `MNEMO_STRICT=1` for non-zero exit codes. `mnemo --help` lists all commands; every command, exit code, daemon verb and MCP tool is in [docs/api.md](docs/api.md).
+
+Without installing, from a clone, `scripts/mnemo <command>` runs the same CLI.
+
+### Install the hooks (Claude Code)
+
+`mnemo install claude-code` merges five hooks into `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`), so Claude Code journals prompts and final replies and injects a briefing at session start; `--scope local|project` and `--mcp` are described in `integrations/claude-code/README.md`. `mnemo install claude-code --status` shows where it is installed. These hooks have not yet been exercised in a live Claude Code session (see the checklist).
+
+### MCP-only hosts (Codex, Gemini CLI, Grok, others)
+
+Hosts without a hook interface get the MCP tools only: `recall`, `remember`, `reflect`, `forget`, `engram_status`. Nothing is captured or injected automatically, so tell the model (in the host's rules or instructions file) to call `recall` before starting work and `remember` for decisions. Print the server entry and paste it into the host's MCP configuration:
+
+```sh
+mnemo install --print mcp                 # JSON mcpServers entry
+mnemo install --print mcp --format toml   # Codex-style [mcp_servers.engram] table
+```
+
+It writes nothing. Where each host wants the snippet (Codex `~/.codex/config.toml`, Gemini CLI `~/.gemini/settings.json`) is unverified; check the host's documentation. Cursor has its own installer, `mnemo install cursor` (MCP entry plus, with `--scope project`, a rule file; also unverified against a real Cursor, see `integrations/cursor/README.md`). Start the daemon with `mnemo up` first: the MCP server does not start it.
 
 ### Use it from Claude Code (MCP)
 
@@ -93,6 +114,11 @@ ENGRAM_PERF=1 python3 -m unittest tests.test_perf          # 10k-memory recall l
 - [Product concept](docs/product-concept.md): the problem, the thesis, how Engram behaves, and project direction.
 - [Technical details](docs/technical-details.md): schema, algorithms, thresholds, process architecture, and build order.
 - [Configuration](docs/configuration.md): every environment variable.
+- [Architecture](docs/architecture.md): how the engine, daemon, client, MCP server, CLI, hooks, sleep cycle, plugins, installer and Docker image fit together.
+- [API reference](docs/api.md): daemon verbs, MCP tools, `mnemo` commands and exit codes.
+- [Threat model](docs/threat-model.md): assets, trust boundaries, defences against hostile memory text, consent for remote calls, known gaps.
+- [Docker sidecar](docs/docker.md) and [traction checklist](docs/traction-checklist.md) (what to verify before announcing).
+- [Reviewer's guide](docs/review-guide.md).
 - [Architecture notes](docs/architecture/): status, lessons, plan and decisions (ADRs in [docs/adr/](docs/adr/)).
 
 ## License

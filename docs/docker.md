@@ -2,7 +2,7 @@
 
 Runs the Engram daemon in a container so several tools on one machine share a memory store without a Unix socket. Files: `Dockerfile`, `docker-compose.yml`, `.dockerignore`. Decision record: ADR 0013 (policy: ADR 0004).
 
-**Status: the Dockerfile and compose file are covered by static tests and the daemon was run with the same environment as a plain process; an actual `docker build`/`docker run` has not been run (no docker daemon was available when this was written). Run `python3 -m unittest scripts.test_docker -v` on a machine with docker to verify.**
+**Status: the Dockerfile and compose file are covered by static tests. In T31 the image was built (`docker build --network none`) and run once with the compose hardening (read-only root, all capabilities dropped, `no-new-privileges`, uid 10001): it became healthy, `mnemo status --strict`, `remember` and `recall` worked inside it, data survived a restart, and it refused to start without a valid token. NOT verified: `docker compose up`, the published `127.0.0.1:47600` port with a host-side client, and `scripts.test_docker` (needs a reachable docker daemon; skipped otherwise). Run `python3 -m unittest scripts.test_docker -v` on a machine with docker to verify.**
 
 ## Start
 
