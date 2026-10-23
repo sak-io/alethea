@@ -96,6 +96,19 @@ class Reembedder:
             t["id"], t["ready"], t["reason"] = s.get("embedder_id"), True, None
         return t
 
+    def _nudge(self):
+        """The breaker's recovery probe only runs when something asks for an embedding. If the
+        embedder is merely falling back, ask once (a constant string; bounded, breaker-aware, no
+        network while the cooldown runs) so a healed server is noticed, then look again."""
+        t = self.target()
+        if not t["ready"] and not t["loading"] and t["configured"]:
+            vectorize.embed_batch(["engram reembed readiness probe"])
+            end = time.monotonic() + vectorize.EMBED_TIMEOUT + 0.1
+            while vectorize.probing() and time.monotonic() < end:
+                time.sleep(0.02)
+            t = self.target()
+        return t
+
     # --- queries ---
 
     @staticmethod
@@ -152,7 +165,7 @@ class Reembedder:
             return self._start(confirm, batch, include_identity)
 
     def _start(self, confirm, batch, include_identity):
-        t = self.target()
+        t = self._nudge()
         if not t["ready"]:
             return False, "embedder not ready: %s" % (t["reason"] or "unknown")
         if t["remote"] and not confirm:
@@ -255,7 +268,7 @@ class Reembedder:
 
     def _loop(self, stop):
         while not stop.is_set():
-            t = self.target()
+            t = self._nudge()
             with self._m:
                 want, ident, batch = self.st["target"], self.st["include_identity"], self.st["batch"]
                 cursor = self.st["cursor"]

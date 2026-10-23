@@ -236,8 +236,8 @@ class Progress(Base):
         # heal the server and the breaker; the run resumes where it stopped
         self.stub.fail_after = None
         with vectorize._lock:
-            vectorize._open_until = vectorize._failures = 0
-            vectorize._cooldown = 0.0
+            vectorize._open_until = time.monotonic() - 1    # cooldown over: next call probes
+            vectorize._failures = 0
         sent = len(self.stub.inputs)
         d.reembed("start", confirm=True, batch=3)
         self.assertTrue(d.wait_state(("done",)), d.reembed("status"))

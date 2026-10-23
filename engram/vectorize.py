@@ -789,6 +789,12 @@ def embed_batch(texts, embedder_id=None):
     return embedder_id, [embed(t) for t in texts]
 
 
+def probing():
+    """True while the breaker's recovery probe is in flight (reembed waits for it briefly)."""
+    with _lock:
+        return bool(_probing)
+
+
 def is_loaded_id(embedder_id):
     """True when `embedder_id` is the id of the loaded optional embedder (not hashed)."""
     with _lock:
