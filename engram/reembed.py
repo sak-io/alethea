@@ -174,6 +174,12 @@ class Reembedder:
             return False, "confirmation required: memory text would be sent to %s" % (
                 t["host"] or "a remote host")
         batch = max(1, min(int(batch), MAX_BATCH))
+        th = self._thread
+        if th is not None and th.is_alive():
+            with self._m:
+                winding_down = self.st["state"] != "running"
+            if winding_down:
+                th.join(timeout=3.0)    # the state says paused/done but the thread is still returning
         with self._m:
             if self._thread is not None and self._thread.is_alive():
                 return False, "a reembed run is already in progress"

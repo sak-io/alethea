@@ -263,7 +263,7 @@ class Progress(Base):
                     self.assertLess(d.last_s, 5.0)
             time.sleep(0.05)
         self.assertLess(worst, 0.5)
-        self.assertTrue(d.wait_state(("done",), 40), d.reembed("status"))
+        self.assertTrue(d.wait_state(("done",)), d.reembed("status"))
         self.assertEqual({e for e, _ in d.ids()}, {OPENAI_ID})
         self.assertEqual(len(d.rows()), 46)
 
@@ -279,7 +279,7 @@ class Progress(Base):
             return real(texts, eid)
         with mock.patch.object(reembed.vectorize, "embed_batch", sometimes_busy):
             d.reembed("start", confirm=True, batch=2)
-            self.assertTrue(d.wait_state(("done",), 20), d.reembed("status"))
+            self.assertTrue(d.wait_state(("done",)), d.reembed("status"))
         st = d.reembed("status")["reembed"]
         self.assertEqual((st["done"], st["failures"]), (8, 0))
         self.assertGreater(calls["n"], 8)
@@ -290,7 +290,7 @@ class Progress(Base):
                 reembed.vectorize, "embed_batch",
                 lambda texts, eid=None: (vectorize.EMBEDDER_ID, [vectorize.embed(t) for t in texts])):
             d.reembed("start", confirm=True, batch=2)
-            self.assertTrue(d.wait_state(("paused",), 20), d.reembed("status"))
+            self.assertTrue(d.wait_state(("paused",)), d.reembed("status"))
         self.assertEqual(d.reembed("status")["reembed"]["done"], 0)
 
     def test_cancel_stops_the_run_and_leaves_the_rest_lexical_only(self):
@@ -355,7 +355,7 @@ class CancelAndHost(Base):
         self.addCleanup(other.stop)
         d = RDaemon(remote_env(other), home=home)  # same model and dimension, different host
         self.daemons.append(d)
-        self.assertTrue(d.wait_state(("paused",), 10), d.reembed("status"))
+        self.assertTrue(d.wait_state(("paused",)), d.reembed("status"))
         st = d.reembed("status")["reembed"]
         self.assertIn("host changed", st["last_error"])
         self.assertIn("127.0.0.1:%d" % other.port, st["last_error"])
@@ -364,9 +364,44 @@ class CancelAndHost(Base):
         r = d.reembed("start")                     # without confirmation: refused
         self.assertFalse(r["ok"])
         self.assertTrue(d.reembed("start", confirm=True)["ok"])    # fresh, confirmed run
-        self.assertTrue(d.wait_state(("done",), 20), d.reembed("status"))
+        self.assertTrue(d.wait_state(("done",)), d.reembed("status"))
         self.assertGreater(len(other.inputs), 0)
         self.assertEqual({e for e, _ in d.ids()}, {OPENAI_ID})
+
+
+class SettleRace(Base):
+    def test_start_right_after_a_pause_is_not_refused_while_the_thread_returns(self):
+        """CI flake: state 'paused' is published before the worker thread has returned. Widen
+        that window on purpose; a start in it must wait for the thread, not say 'in progress'."""
+        d = self.remote(self.hashed_store(6, identity=False))
+        self.stub.fail_after = 1
+        self.stub.after_mode = "500"
+        real = reembed.Reembedder._persist
+
+        def slow_persist(rb):
+            real(rb)
+            if rb.st["state"] == "paused":
+                time.sleep(0.6)              # the thread is still alive after publishing 'paused'
+        with mock.patch.object(reembed.Reembedder, "_persist", slow_persist):
+            d.reembed("start", confirm=True, batch=2)
+            self.assertTrue(wait_for(lambda: d.reembed("status")["reembed"]["state"] == "paused", 30))
+            self.assertTrue(d.engram.reembed.status()["active"])         # the window is open
+            self.stub.fail_after = None
+            with vectorize._lock:
+                vectorize._open_until = time.monotonic() - 1
+                vectorize._failures = 0
+            r = d.reembed("start", confirm=True, batch=2)
+        self.assertTrue(r["ok"], r)
+        self.assertTrue(d.wait_state(("done",)), d.reembed("status"))
+
+    def test_a_genuinely_running_run_still_refuses_a_second_start(self):
+        d = self.remote(self.hashed_store(10, identity=False))
+        self.stub.delay = 0.2
+        d.reembed("start", confirm=True, batch=2)
+        r = d.reembed("start", confirm=True)
+        self.assertFalse(r["ok"])
+        self.assertIn("already", r["error"])
+        d.reembed("cancel")
 
 
 class KillNineResume(unittest.TestCase):
