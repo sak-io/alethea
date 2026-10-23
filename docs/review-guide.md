@@ -46,7 +46,7 @@ Memory kinds and decay: episodic, semantic, procedural, identity (never decays).
 **Trust boundaries (where hostile input enters):**
 1. Anything a user or agent says (prompts, replies, `remember` text) becomes stored text. It is later injected into model prompts (briefing, MCP recall output, exported rules). Stored text is **untrusted**.
 2. Local processes talking to the daemon socket/TCP port.
-3. The user's own files that the tool edits: Claude Code `settings.json` (installer) and `.claude/engram_learned.md` / `.cursor/rules/...` (export).
+3. The user's own files that the tool edits: Claude Code `settings.json` (installer) and `.claude/engram_learned.md` <!-- verify-guide: runtime --> / `.cursor/rules/...` (export).
 4. The working directory a hook or autostart is launched from (Python's `-m` puts it first on `sys.path`).
 
 ## 3. The properties that matter (check these first)
@@ -55,7 +55,7 @@ Each row: what must always hold, where it is enforced, which tests prove it, and
 
 | # | Property | Enforced in | Tested in | Try breaking it |
 | :-- | :---- | :---- | :---- | :---- |
-| P1 | **A memory service problem never breaks the session.** Client returns an offline dict instead of raising; hooks always exit 0, print only intended JSON, 2 s watchdog; SIGTERM exits 0. | `client.call` (client.py:178), `client.send_nowait` (:201), `engram_hook.main` (hooks/engram_hook.py:224, `DEADLINE_S` :26) | `tests/test_client_failsoft.py`, `scripts/test_hooks.py` (via `tests/test_hooks_wrapper.py`) | Make the client re-raise on `OSError`; make the hook print a stray line. |
+| P1 | **A memory service problem never breaks the session.** Client returns an offline dict instead of raising; hooks always exit 0, print only intended JSON, 2 s watchdog; SIGTERM exits 0. | `client.call` (client.py:178), `client.send_nowait` (:201), `engram_hook.main` (engram/hooks/engram_hook.py:224, `DEADLINE_S` :26) | `tests/test_client_failsoft.py`, `scripts/test_hooks.py` (via `tests/test_hooks_wrapper.py`) | Make the client re-raise on `OSError`; make the hook print a stray line. |
 | P2 | **Two distinct facts are never merged.** `similarity = max(cosine, jaccard)`, never a blend, then damped by identifier (digits, paths, camelCase/snake_case, case-only), negation/antonym, substitution and word-order vetoes; merge threshold `NEAR_DUPLICATE = 0.88`; bias is toward storing a redundant copy. | `encode.similarity` (encode.py:141), `_identifier_veto` :79, `_negation_veto` :92, `_substitution_veto` :103, `_order_veto` :111, `NEAR_DUPLICATE` :11, `_best_duplicate` :333 | `tests/test_dedup_adversarial.py`, `tests/test_dedup_extra.py`, `tests/test_similarity.py`; ADR 0006, 0007 | Delete one veto, or average cosine and jaccard: adversarial pair tests fail. |
 | P3 | **Dedup cost is bounded** at the price of occasionally storing an old near-duplicate twice. The full-text window is the newest 2000 rows; memories created while capped carry `meta.dedup_window_capped`; `mnemo status` shows the cap state. | `encode.dedup_fts_window` (:252), `encode._best_duplicate`, `recall.candidates(fts_window=...)` | `tests/test_dedup_window.py`; ADR 0008 | Remove the window: write cost grows with corpus size (`scripts/bench_write.py`). |
 | P4 | **Secrets are redacted before anything is stored**, including journal rows, memory text, keywords and metadata. Best-effort, not a guarantee. | `redact.redact_with_kinds` (redact.py:122); applied at every ingestion point in `encode.py` (`_clean` ~:289, `_r` ~:305, `_redact_meta` ~:309) | `tests/test_redact.py`, `tests/test_encode_gate.py` (greps the raw DB and WAL bytes), `scripts/test_hooks.py` | Skip `redact` in `observe`: the byte-grep tests fail. Known gaps: `docs/architecture/lessons.md`. |
@@ -80,7 +80,7 @@ Rough time boxes assume a reviewer who reads carefully; treat them as estimates,
 | B. Retrieval | `recall.py` (350) | Candidate generation, fusion, floors, reinforcement, briefing, spreading activation | 1 h |
 | C. Sleep | `consolidate.py` (665), `fairlock.py` (57) | Replay, gist, downscale/prune/purge safety, recombine, lock release per batch | 1.5-2 h |
 | D. Processes | `daemon.py` (903), `client.py` (328), `config.py` (61), `gitctx.py` (80) | Request parsing and limits, auth, lifecycle, fail-soft client, autostart | 2 h |
-| E. Host surfaces | `mcp_server.py` (398), `hooks/engram_hook.py` (249), `cli.py` (353), `export.py` (342), `install.py` (555) | Hook contract, JSON-RPC conformance, file-write safety, installer merge logic | 2-3 h |
+| E. Host surfaces | `mcp_server.py` (398), `engram/hooks/engram_hook.py` (249), `cli.py` (353), `export.py` (342), `install.py` (555) | Hook contract, JSON-RPC conformance, file-write safety, installer merge logic | 2-3 h |
 | F. Packaging and CI | `pyproject.toml`, `MANIFEST.in`, `.github/workflows/ci.yml` | Entry points, no runtime dependencies, what the CI jobs prove | 20 min |
 | G. Design record | `docs/architecture/plan.md`, ADRs 0001-0009, `docs/architecture/status.md` | Whether the decisions are ones you accept | 45 min |
 
