@@ -108,7 +108,7 @@ class ConsentAndConfig(AdapterBase):
     def test_bad_urls_and_models_are_refused(self):
         for url in ("ftp://x.example/v1", "https://user:pw@x.example/v1", "https://x.example/v1?a=1",
                     "https://x.example/v1#f", "https:///v1", "https://x.example:99999/v1",
-                    "https://x.example/v1 \n"):
+                    "https://x.example/v 1"):
             with self.subTest(url=url):
                 er.configure_env({"ENGRAM_EMBEDDER_URL": url, "ENGRAM_EMBEDDER_ALLOW_REMOTE": "1",
                                   "ENGRAM_EMBEDDER_API_KEY": KEY})
@@ -222,30 +222,31 @@ class RedactionAtTheBoundary(AdapterBase):
 
 class HttpHardening(AdapterBase):
     def check(self, mode, kind, **setup):
-        e = self.make()
-        self.stub.mode = mode
+        stub = Stub()
+        self.addCleanup(stub.stop)
+        e = self.make(stub)
+        stub.mode = mode
         for k, v in setup.items():
-            setattr(self.stub, k, v)
-        self.assertEqual(self.kind(e.embed_many, ["some text"]), kind, mode)
+            setattr(stub, k, v)
+        self.assertEqual(self.kind(e.embed_many, ["some text", "more text"]), kind, mode)
         return e
 
     def test_server_errors_and_auth(self):
         self.check("500", "http-5xx")
         self.check("429", "rate-limited")
-        self.stub.mode = "ok"
         self.stub.key = "another-key"
-        self.assertEqual(self.kind(self.make().embed_many if False else er.make_openai, MODEL), "auth")
+        self.assertEqual(self.kind(er.make_openai if self.make_cfg() else None, MODEL), "auth")
+
+    def make_cfg(self):
+        er.configure_env(remote_env(self.stub))
+        return True
 
     def test_malformed_and_non_finite_and_wrong_shape(self):
         for mode, kind in (("badjson", "protocol"), ("nan", "protocol"), ("inf", "nonfinite"),
                            ("short", "protocol"), ("dupindex", "protocol"), ("html", "protocol"),
-                           ("strings", "protocol")):
+                           ("strings", "protocol"), ("ragged", "dimension")):
             with self.subTest(mode=mode):
-                self.stub.mode = "ok"
                 self.check(mode, kind)
-        e = self.make()
-        self.stub.mode = "ragged"
-        self.assertIn(self.kind(e.embed_many, ["a", "b"]), ("dimension",))
 
     def test_dimension_change_between_calls_is_rejected(self):
         e = self.make()
@@ -396,6 +397,7 @@ class DaemonContainment(unittest.TestCase):
                         ("briefing", {})):
             d.call(verb, p)
             worst = max(worst, d.last_s)
+            print(verb, round(d.last_s, 3))
         self.assertLess(worst, 0.5)
 
     def test_server_errors_open_the_breaker_and_no_calls_happen_in_cooldown(self):
@@ -514,7 +516,7 @@ class DefaultPathStaysClean(unittest.TestCase):
     def test_nothing_remote_is_imported_or_started_by_default(self):
         home = make_home()
         code = (
-            "import sys, threading\n"
+            "import sys, threading\nsys.path.insert(0, sys.argv[2])\n"
             "from engram.daemon import Engram\n"
             "e = Engram(home=sys.argv[1], env={'ENGRAM_HOME': sys.argv[1]})\n"
             "e.handle('remember', {'content': 'default path memory about the ledger'})\n"
@@ -525,7 +527,7 @@ class DefaultPathStaysClean(unittest.TestCase):
             "names = [t.name for t in threading.enumerate()]\n"
             "print(bad, [n for n in names if 'embedder' in n or 'reembed' in n])\n"
             "e.close()\n")
-        r = subprocess.run([sys.executable, "-I", "-c", code, home], cwd=ROOT, env=dict(
+        r = subprocess.run([sys.executable, "-I", "-c", code, home, ROOT], cwd=ROOT, env=dict(
             os.environ, PYTHONPATH=ROOT, PYTHONDONTWRITEBYTECODE="1"), capture_output=True,
             text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr)
