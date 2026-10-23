@@ -97,3 +97,16 @@ Rewrites the vector and `embedder_id` of active memories whose id differs from t
 - IDENTITY memories are skipped (they are the most personal) unless `--include-identity`. Archived and suppressed rows are not migrated.
 - Batches of 32 (max 64) are embedded without the engine lock and written in one transaction with the cursor (`engram_meta` key `reembed`), so a restart or `kill -9` resumes at the next batch; a run that was in progress when the daemon stopped continues at the next start. Failed batches are retried with backoff; after 5 in a row the run pauses with the reason and `--yes` resumes it. Until a row is migrated it is found by full-text search only.
 - Real provider behaviour is UNVERIFIED: every test used a local stub server.
+
+## Installing into hosts (`mnemo install|uninstall`)
+
+| Command | Writes |
+|---|---|
+| `mnemo install claude-code [--scope user\|local\|project] [--mcp]` | Claude Code `settings.json` hooks (ADR 0009). |
+| `mnemo install cursor [--scope user\|project]` | The MCP server entry `mcpServers.engram` in `~/.cursor/mcp.json` (user, default) or `<git root>/.cursor/mcp.json` (project), and with `--scope project` only the Engram-owned rule `<git root>/.cursor/rules/engram.mdc`. No hooks. |
+| `mnemo uninstall cursor [--scope ...]` | Removes only the entry and files above that Engram wrote, and a directory that leaves empty. |
+| `mnemo install --print mcp [--format json\|toml]` | Writes nothing; prints an MCP-only snippet to stdout for Codex, Gemini CLI, Grok and other MCP hosts (JSON `mcpServers`, or a Codex `[mcp_servers.engram]` TOML table). **MCP only: the host gets the `recall`/`remember` tools but no hooks, so nothing is captured or injected automatically.** |
+
+All of `install|uninstall cursor` accept `--dry-run` (prints a diff, writes nothing); `install cursor --status` shows what is installed. Safety, shared with the Claude Code installer: merge not replace, idempotent, atomic writes, no symlink followed, `mcp.json.engram-backup` kept on the first change to an existing file, entries recognised by signature (a python interpreter running `-I -m engram.mcp_server`), invalid JSON or a foreign `engram` server refused with the file untouched (exit 2), hand-written rule files never touched. The interpreter is recorded as an absolute path with `-I`, so Engram must be installed (`pip install engram-memory`) for that interpreter, and a project directory containing a fake `engram/` package is never imported. `--scope project` stores a machine-specific interpreter path in `.cursor/mcp.json`: do not commit it.
+
+**Unverified:** no real Cursor was available. File locations, the `mcpServers` shape, the `.mdc` frontmatter and Cursor's reload behaviour follow its public documentation as recalled; Codex/Gemini paths printed in the note are likewise unchecked. `integrations/cursor/hooks.example.json` is a labelled sketch that does nothing today (the hook only understands Claude Code event names). See `integrations/cursor/README.md`.

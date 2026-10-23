@@ -230,7 +230,7 @@ Goal: R31.
 Files: `engram/installer.py`, `engram/cli.py`, `tests/test_installer.py`.
 Details: detect Claude Code (`.claude/`, `claude` on PATH) and Cursor (`.cursor/`); write only detected hosts' MCP registration, snippet, hook wiring; merge JSON without clobbering user keys; idempotent; `--dry-run`; reports changes; never edits CLAUDE.md or `.cursor/rules` hand-written files (prints the import line instead).
 Reqs: R31. Needs: T23, T29.
-Delivered in P2b: Claude Code part (`engram/install.py` instead of `installer.py`, `tests/test_install.py`, packaging in `pyproject.toml`, ADR 0009). Remaining: Cursor/other-host detection and registration, snippet guidance, auto-update.
+Delivered in P2b: Claude Code part (`engram/install.py` instead of `installer.py`, `tests/test_install.py`, packaging in `pyproject.toml`, ADR 0009). Cursor and MCP-only snippets delivered with T29 (`engram/install_hosts.py`, `tests/test_cursor.py`; no auto-detection: the host is named explicitly). Remaining: snippet guidance, auto-update.
 Verify: `python3 -m unittest tests.test_installer -v`
 
 ### T31 Release docs and final checks [plug] tier N
