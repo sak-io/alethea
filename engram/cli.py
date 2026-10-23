@@ -172,6 +172,10 @@ def _fmt_status(r):
     _out("daemon: up (pid %s, uptime %ss)" % (r.get("pid"), r.get("uptime_s")))
     _out("embedder: %s   fts5: %s   schema: %s" % (
         r.get("embedder_id"), "yes" if r.get("fts") else "no", r.get("schema_version")))
+    if r.get("embedder_configured") not in (None, "hash"):
+        _out("embedder configured: %s   state: %s   falling back: %s   fallbacks: %s" % (
+            r.get("embedder_configured"), r.get("embedder_state"),
+            "yes" if r.get("embedder_falling_back") else "no", r.get("embedder_fallbacks")))
     ls = r.get("last_sleep")
     _out("last sleep: %s" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ls))
                              if ls else "never"))

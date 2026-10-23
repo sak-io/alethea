@@ -197,6 +197,7 @@ class Engram:
         self.home = ensure_private_dir(home or home_dir(self.env))
         cfg = load_config(self.env, self.home)
         warn_reserved(cfg)
+        vectorize.configure(cfg["ENGRAM_EMBEDDER"], quiet=True)  # lazy: nothing optional is imported yet
         self.sleep_interval = max(0, cfg["ENGRAM_SLEEP_INTERVAL"])
         self.idle_sleep = max(0, cfg["ENGRAM_IDLE_SLEEP"])
         self.clock, self.mono = clock, mono
@@ -392,7 +393,7 @@ class Engram:
         except ValueError:
             last = None
         return {"ok": True, "version": __version__, "schema_version": schema,
-                "embedder_id": vectorize.EMBEDDER_ID, "fts": self.cortex.fts_available,
+                **vectorize.status(), "fts": self.cortex.fts_available,
                 "counts": counts, "total": sum(sum(v.values()) for v in counts.values()),
                 "journal_pending": pending, "dedup": dedup, "last_sleep": last, "pid": os.getpid(),
                 "uptime_s": round(self.mono() - self.started, 1),
@@ -858,13 +859,15 @@ _reserved_warned = False
 
 
 def warn_reserved(cfg):
-    """One stderr line (once per process) if a reserved, not-yet-implemented option is set."""
+    """One stderr line (once per process) if an unknown embedder or a reserved option is set."""
     global _reserved_warned
     if _reserved_warned:
         return
     bad = []
-    if str(cfg.get("ENGRAM_EMBEDDER", "hash")).strip().lower() != "hash":
-        bad.append("ENGRAM_EMBEDDER=%s (only the built-in hash embedder exists)"
+    try:
+        vectorize.parse_spec(cfg.get("ENGRAM_EMBEDDER", "hash"))
+    except vectorize.UnknownEmbedder:
+        bad.append("ENGRAM_EMBEDDER=%s (unknown embedder; valid: hash, fastembed:<model>)"
                    % cfg["ENGRAM_EMBEDDER"])
     if cfg.get("ENGRAM_LLM_CONSOLIDATE"):
         bad.append("ENGRAM_LLM_CONSOLIDATE (no LLM consolidation exists; the daemon ignores it)")

@@ -13,7 +13,7 @@ import json
 import math
 import time
 
-from engram import encode
+from engram import encode, vectorize
 from engram.config import DOWNSCALE_INTERVAL_S
 from engram.cortex import (ARCHIVE_ACTIVATION, DAY_S, DOWNSCALE_FACTOR,
                            DOWNSCALE_RATE, MIN_STRENGTH)
@@ -148,7 +148,9 @@ def recombine(cortex, lock=None):
         if a["embedder_id"] != b["embedder_id"]:
             continue
         s = encode.similarity(a["content"], b["content"], embedder=a["embedder_id"])
-        if not (RECOMBINE_LO <= s <= RECOMBINE_HI):
+        eid = a["embedder_id"]
+        if not (vectorize.tuning(eid, "RECOMBINE_LO", RECOMBINE_LO) <= s
+                <= vectorize.tuning(eid, "RECOMBINE_HI", RECOMBINE_HI)):
             continue
         with _lock(lock):
             if (cortex.edge_weight(a["id"], b["id"], "recombined") is not None

@@ -125,26 +125,40 @@ def _order_veto(a, b):
 def threshold(embedder=None):
     """Near-duplicate threshold for an embedder id (hook for dense embedders).
 
-    Never below NEAR_DUPLICATE: a looser threshold risks silent false merges.
+    Never below NEAR_DUPLICATE: a looser threshold risks silent false merges. An embedder
+    may declare a stricter one (`Embedder.NEAR_DUPLICATE`, read via `vectorize.tuning`).
     """
-    return max(NEAR_DUPLICATE, _THRESHOLDS.get(embedder, NEAR_DUPLICATE))
+    declared = vectorize.tuning(embedder, "NEAR_DUPLICATE", NEAR_DUPLICATE)
+    return max(NEAR_DUPLICATE, _THRESHOLDS.get(embedder, NEAR_DUPLICATE), declared)
 
 
 def register_threshold(embedder, value):
     _THRESHOLDS[embedder] = float(value)
 
 
-def _raw_similarity(a, b):
-    return max(cosine(vectorize.embed(a), vectorize.embed(b)), jaccard(a, b))
+def _raw_similarity(a, b, embedder=None):
+    """max(cosine, jaccard). The cosine is taken between vectors of ONE embedder: `embedder`
+    when it is loaded, else (None, hashed, unknown id, or the embedder failed) the hashed
+    vectors. Jaccard and every veto work on text and do not depend on it."""
+    if not (a or "").strip() or not (b or "").strip():
+        return 0.0  # a dense model embeds "" to a real vector; empty text is similar to nothing
+    if embedder is None or embedder == vectorize.EMBEDDER_ID:
+        va, vb = vectorize.embed(a), vectorize.embed(b)
+    else:
+        used, (va, vb) = vectorize.embed_batch((a, b), embedder)
+        if used != embedder and used != vectorize.EMBEDDER_ID:
+            va, vb = vectorize.embed(a), vectorize.embed(b)
+    return max(cosine(va, vb), jaccard(a, b))
 
 
 def similarity(a, b, embedder=None):
     """max(cosine, jaccard), damped x0.55 by identifier and negation/antonym vetoes.
 
-    Vetoes apply under every embedder. Only the default hashed embedder is
-    available until T25; `embedder` selects the threshold, not the vectors.
+    Vetoes apply under every embedder and look at the text only, never at the vectors.
+    `embedder` None means the hashed embedder; an id of a loaded optional embedder uses its
+    vectors; any other id uses hashed vectors (and only selects the threshold).
     """
-    s = _raw_similarity(a, b)
+    s = _raw_similarity(a, b, embedder)
     if s <= 0.0:
         return 0.0
     ident = _identifier_veto(a, b)
@@ -340,7 +354,7 @@ def _best_duplicate(cortex, content, embedder_id):
         if m.get("embedder_id") != embedder_id:
             continue  # never compare across embedders
         a, b = content[:markers.MAX_CHARS], (m["content"] or "")[:markers.MAX_CHARS]
-        pool.append((-_raw_similarity(a, b), i, a, b, m))
+        pool.append((-_raw_similarity(a, b, embedder_id), i, a, b, m))
     # Vetoes only damp (x < 1), so similarity <= raw. Visit by descending raw and stop
     # once raw < best: the result (best score and, on ties, the earliest candidate) is
     # identical to scoring every candidate, but the veto work is skipped.
@@ -356,7 +370,7 @@ def _best_duplicate(cortex, content, embedder_id):
 
 def encode(cortex, content, kind=None, salience=None, force=False, deliberate=False,
            session_id=None, cwd=None, repo_root=None, meta=None,
-           embedder_id=vectorize.EMBEDDER_ID):
+           embedder_id=None):
     """The encode gate. Returns {"status": "created"|"reinforced"|"rejected", ...}.
 
     Content, gist, keywords and meta are redacted before anything is stored.
@@ -366,6 +380,9 @@ def encode(cortex, content, kind=None, salience=None, force=False, deliberate=Fa
         return {"status": "rejected", "reason": "empty"}
     if _TRIVIAL.match(content) and not (force or deliberate):
         return {"status": "rejected", "reason": "trivial"}
+    # One embedder for this whole write: the configured one, or hashed if it failed (the
+    # stored embedder_id is the one that really produced the vector).
+    embedder_id, (vec,) = vectorize.embed_batch([content], embedder_id)
     best, dup = _best_duplicate(cortex, content, embedder_id)
     if dup is not None and best >= threshold(embedder_id):
         cortex.reinforce(dup["id"], REINFORCE_STEP)
@@ -395,7 +412,7 @@ def encode(cortex, content, kind=None, salience=None, force=False, deliberate=Fa
     mid = cortex.insert(
         kind, content, gist=_gist(content), keywords=_keywords(content), salience=effective,
         session_id=session_id, cwd=cwd, repo_root=repo_root,
-        vector=vectorize.embed(content), embedder_id=embedder_id,
+        vector=vec, embedder_id=embedder_id,
         meta=meta)
     res = {"status": "created", "id": mid, "kind": kind, "salience": effective}
     if capped:
@@ -433,7 +450,7 @@ def forget(cortex, mid):
 
 
 def observe(cortex, content, session_id=None, role=None, cwd=None, repo_root=None,
-            embedder_id=vectorize.EMBEDDER_ID):
+            embedder_id=None):
     """Involuntary pathway: always journal (redacted); promote if durable."""
     content = _clean(content)
     if not content.strip():
