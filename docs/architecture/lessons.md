@@ -56,3 +56,10 @@ The 2000-row FTS window in the dedup path is a deliberate, owner-accepted trade-
 - Editing a user's settings file is merge-only: JSON is re-serialised with 2-space indent, so formatting/comments of a hand-formatted file change (JSON has no comments); the first-change backup `settings.json.engram-backup` keeps the original bytes.
 - `python -m pkg` puts the current directory first on `sys.path`: any command Engram registers or spawns (hook, MCP server, autostarted daemon) must run isolated (`-I`) or from an explicit package root, otherwise a project with a fake `engram/` package gets code execution in every session. The daemon bootstrap is `[python, -I, -c, bootstrap, package_root]` with cwd = Engram home. Covered by `tests/test_poisoned_cwd.py`.
 - T30 remainder: Cursor and other hosts, auto-update.
+
+## Embedder plugins (T25)
+- Never call `vectorize.embed()` from new code that should honour `ENGRAM_EMBEDDER`: use `vectorize.embed_batch(texts, embedder_id)` and store the returned id (a fallback returns the hashed id, and a vector must always be stored under the id that produced it). `vectorize.embed()` is the hashed embedder by design.
+- Vetoes are textual; do not add any veto or threshold that reads vector values. A dense model puts "enable X"/"disable X" at cosine 0.97+, which `tests/fake_dense.py` reproduces; `tests/test_dedup_dense.py` must stay green for every new embedder (add it to `EMBEDDER_NAMES`).
+- The T02 files were left untouched (their `EMBEDDERS = ["hashed"]` helper takes names, not activated embedders, so appending a name there would silently test hashed vectors under a different label); the per-embedder runs live in `tests/test_dedup_dense.py`.
+- Real-model cosine distributions are unmeasured: thresholds stay at the hashed defaults until someone measures a real model (see ADR 0010).
+
