@@ -136,29 +136,32 @@ def register_threshold(embedder, value):
     _THRESHOLDS[embedder] = float(value)
 
 
-def _raw_similarity(a, b, embedder=None):
-    """max(cosine, jaccard). The cosine is taken between vectors of ONE embedder: `embedder`
-    when it is loaded, else (None, hashed, unknown id, or the embedder failed) the hashed
-    vectors. Jaccard and every veto work on text and do not depend on it."""
+def _raw_similarity(a, b, embedder=None, vectors=None):
+    """max(cosine, jaccard). The cosine is taken between `vectors` (a pair of blobs that the
+    caller already has, for example stored vectors or ones computed before the engine lock was
+    taken) or, when none are given, between the HASHED vectors of the two texts. This function
+    never calls an optional embedder: it can run under the engine lock (T25, ADR 0010).
+    Jaccard and every veto work on text and do not depend on the vectors."""
     if not (a or "").strip() or not (b or "").strip():
         return 0.0  # a dense model embeds "" to a real vector; empty text is similar to nothing
-    if embedder is None or embedder == vectorize.EMBEDDER_ID:
-        va, vb = vectorize.embed(a), vectorize.embed(b)
+    if vectors is not None:
+        va, vb = vectors
     else:
-        used, (va, vb) = vectorize.embed_batch((a, b), embedder)
-        if used != embedder and used != vectorize.EMBEDDER_ID:
-            va, vb = vectorize.embed(a), vectorize.embed(b)
+        va, vb = vectorize.embed(a), vectorize.embed(b)
     return max(cosine(va, vb), jaccard(a, b))
 
 
-def similarity(a, b, embedder=None):
+def similarity(a, b, embedder=None, vectors=None):
     """max(cosine, jaccard), damped x0.55 by identifier and negation/antonym vetoes.
 
     Vetoes apply under every embedder and look at the text only, never at the vectors.
-    `embedder` None means the hashed embedder; an id of a loaded optional embedder uses its
-    vectors; any other id uses hashed vectors (and only selects the threshold).
+    `vectors=(va, vb)` supplies the vectors of the embedder `embedder` (stored or precomputed);
+    without them the hashed vectors are used and `embedder` only selects the threshold.
     """
-    s = _raw_similarity(a, b, embedder)
+    return _apply_vetoes(a, b, _raw_similarity(a, b, embedder, vectors))
+
+
+def _apply_vetoes(a, b, s):
     if s <= 0.0:
         return 0.0
     ident = _identifier_veto(a, b)
@@ -344,25 +347,31 @@ def _gist(text):
     return g if len(g) <= GIST_CHARS else g[:GIST_CHARS].rstrip() + "..."
 
 
-def _best_duplicate(cortex, content, embedder_id):
-    """(best_similarity, memory) over same-embedder recall candidates."""
+def _best_duplicate(cortex, content, embedder_id, vec=None):
+    """(best_similarity, memory) over same-embedder recall candidates. `vec` is the vector of
+    `content` under `embedder_id` (computed by the caller before any lock). For a loaded
+    optional embedder the candidates' STORED vectors are compared with it; no embedder call."""
     from engram import recall  # deferred: recall imports encode (ADR 0002)
     best, best_m, best_i = 0.0, None, -1
     pool = []
+    dense = vec is not None and vectorize.is_loaded_id(embedder_id)
     for i, m in enumerate(recall.candidates(cortex, content, embedder_id=embedder_id, relevance_floor=False,
-                                      fts_window=dedup_fts_window())):
+                                            fts_window=dedup_fts_window(),
+                                            embedded=(embedder_id, [vec]) if vec is not None else None)):
         if m.get("embedder_id") != embedder_id:
             continue  # never compare across embedders
         a, b = content[:markers.MAX_CHARS], (m["content"] or "")[:markers.MAX_CHARS]
-        pool.append((-_raw_similarity(a, b, embedder_id), i, a, b, m))
+        stored = m.get("vector")
+        vecs = (vec, bytes(stored)) if dense and stored else None
+        pool.append((-_raw_similarity(a, b, embedder_id, vecs), i, a, b, m, vecs))
     # Vetoes only damp (x < 1), so similarity <= raw. Visit by descending raw and stop
     # once raw < best: the result (best score and, on ties, the earliest candidate) is
     # identical to scoring every candidate, but the veto work is skipped.
     pool.sort(key=lambda t: (t[0], t[1]))
-    for nraw, i, a, b, m in pool:
+    for nraw, i, a, b, m, vecs in pool:
         if -nraw < best:
             break
-        s = similarity(a, b, embedder=embedder_id)
+        s = similarity(a, b, embedder=embedder_id, vectors=vecs)
         if s > best or (s == best and best_m is not None and i < best_i):
             best, best_m, best_i = s, m, i
     return best, best_m
@@ -370,10 +379,13 @@ def _best_duplicate(cortex, content, embedder_id):
 
 def encode(cortex, content, kind=None, salience=None, force=False, deliberate=False,
            session_id=None, cwd=None, repo_root=None, meta=None,
-           embedder_id=None):
+           embedder_id=None, embedded=None):
     """The encode gate. Returns {"status": "created"|"reinforced"|"rejected", ...}.
 
-    Content, gist, keywords and meta are redacted before anything is stored.
+    Content, gist, keywords and meta are redacted before anything is stored. `embedded` is
+    `embed_for(content)`: a (embedder_id, [vector]) pair computed BEFORE the caller took the
+    engine lock (the daemon always passes it); without it the vector is computed here, which
+    is fine for library use but must not happen under a lock shared with other requests.
     """
     content = _clean(content)
     if not content.strip():
@@ -382,8 +394,11 @@ def encode(cortex, content, kind=None, salience=None, force=False, deliberate=Fa
         return {"status": "rejected", "reason": "trivial"}
     # One embedder for this whole write: the configured one, or hashed if it failed (the
     # stored embedder_id is the one that really produced the vector).
-    embedder_id, (vec,) = vectorize.embed_batch([content], embedder_id)
-    best, dup = _best_duplicate(cortex, content, embedder_id)
+    if embedded is not None:
+        embedder_id, (vec,) = embedded[0], embedded[1][:1]
+    else:
+        embedder_id, (vec,) = vectorize.embed_batch([content], embedder_id)
+    best, dup = _best_duplicate(cortex, content, embedder_id, vec)
     if dup is not None and best >= threshold(embedder_id):
         cortex.reinforce(dup["id"], REINFORCE_STEP)
         return {"status": "reinforced", "id": dup["id"], "similarity": best}
@@ -449,8 +464,24 @@ def forget(cortex, mid):
     return True
 
 
+def embed_for(content, embedder_id=None):
+    """(embedder_id_used, [vector]) for what encode() would store for `content` (redacted and
+    capped first), or None when there is nothing to store. Bounded and fail-soft (hashed on any
+    problem); call it BEFORE taking the engine lock and pass the result as `embedded=`."""
+    clean = _clean(content)
+    if not clean.strip():
+        return None
+    return vectorize.embed_batch([clean], embedder_id)
+
+
+def would_promote(content):
+    """True when observe() would pass `content` to encode() (cheap, no embedding)."""
+    clean = _clean(content)
+    return bool(clean.strip()) and durability(clean) >= OBSERVE_DURABILITY
+
+
 def observe(cortex, content, session_id=None, role=None, cwd=None, repo_root=None,
-            embedder_id=None):
+            embedder_id=None, embedded=None):
     """Involuntary pathway: always journal (redacted); promote if durable."""
     content = _clean(content)
     if not content.strip():
@@ -461,5 +492,5 @@ def observe(cortex, content, session_id=None, role=None, cwd=None, repo_root=Non
     promoted = None
     if durability(content) >= OBSERVE_DURABILITY:
         promoted = encode(cortex, content, session_id=session_id, cwd=cwd,
-                          repo_root=repo_root, embedder_id=embedder_id)
+                          repo_root=repo_root, embedder_id=embedder_id, embedded=embedded)
     return {"journal_id": jid, "promoted": promoted}

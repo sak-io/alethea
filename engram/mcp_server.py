@@ -140,7 +140,8 @@ def render_status(r):
         parts += ["embedder_configured=%s" % r.get("embedder_configured"),
                   "embedder_state=%s" % r.get("embedder_state"),
                   "falling_back=%s" % bool(r.get("embedder_falling_back")),
-                  "fallbacks=%s" % r.get("embedder_fallbacks")]
+                  "fallbacks=%s" % r.get("embedder_fallbacks"),
+                  "reason=%s" % r.get("embedder_reason")]
     return _plain(" ".join(parts), 500)
 
 

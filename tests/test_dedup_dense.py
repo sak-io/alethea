@@ -27,6 +27,14 @@ UNRELATED = [(c, a, b) for c, a, b in PAIRS if c == "unrelated"]
 CASE_ONLY = ("case",)
 
 
+def sim_under(eid, a, b):
+    """encode.similarity with the vectors of embedder `eid` (similarity itself never calls an
+    embedder; it takes vectors, so the dense cosine really is in play)."""
+    used, vecs = vectorize.embed_batch((a, b), eid)
+    assert used == eid, (used, eid)
+    return enc.similarity(a, b, embedder=eid, vectors=tuple(vecs))
+
+
 def raw_under(eid, a, b):
     used, (va, vb) = vectorize.embed_batch((a, b), eid)
     assert used == eid, (used, eid)
@@ -75,7 +83,7 @@ class PerEmbedderDedupTest(unittest.TestCase):
             with self.subTest(embedder=name), activated(name) as eid:
                 for cat, a, b in PAIRS:
                     with self.subTest(embedder=name, cat=cat, a=a, b=b):
-                        s = enc.similarity(a, b, embedder=eid)
+                        s = sim_under(eid, a, b)
                         if cat == MERGE:
                             self.assertGreaterEqual(s, enc.threshold(eid))
                         else:
@@ -87,38 +95,37 @@ class PerEmbedderDedupTest(unittest.TestCase):
                 for cat, a, b in LONG_PAIRS + LONG_PAIRS_EXTRA:
                     with self.subTest(embedder=name, cat=cat, b=b[-40:]):
                         self.assertGreaterEqual(raw_under(eid, a, b), enc.NEAR_DUPLICATE)  # only a veto helps
-                        self.assertLess(enc.similarity(a, b, embedder=eid), enc.threshold(eid))
-                        self.assertLess(enc.similarity(b, a, embedder=eid), enc.threshold(eid))
+                        self.assertLess(sim_under(eid, a, b), enc.threshold(eid))
+                        self.assertLess(sim_under(eid, b, a), enc.threshold(eid))
 
     def test_short_extra_pairs_below_threshold_both_orders(self):
         for name in EMBEDDER_NAMES:
             with self.subTest(embedder=name), activated(name) as eid:
                 for cat, a, b in SHORT_PAIRS:
                     with self.subTest(embedder=name, cat=cat, a=a[-40:]):
-                        self.assertLess(enc.similarity(a, b, embedder=eid), enc.threshold(eid))
-                        self.assertLess(enc.similarity(b, a, embedder=eid), enc.threshold(eid))
+                        self.assertLess(sim_under(eid, a, b), enc.threshold(eid))
+                        self.assertLess(sim_under(eid, b, a), enc.threshold(eid))
 
     def test_symmetric(self):
         for name in EMBEDDER_NAMES:
             with self.subTest(embedder=name), activated(name) as eid:
                 for cat, a, b in PAIRS:
                     with self.subTest(embedder=name, cat=cat):
-                        self.assertAlmostEqual(enc.similarity(a, b, embedder=eid),
-                                               enc.similarity(b, a, embedder=eid), places=9)
+                        self.assertAlmostEqual(sim_under(eid, a, b),
+                                               sim_under(eid, b, a), places=9)
 
     def test_similarity_unit_cases(self):
         """test_similarity.py cases, per embedder."""
         for name in EMBEDDER_NAMES:
             with self.subTest(embedder=name), activated(name) as eid:
                 t = enc.threshold(eid)
-                self.assertAlmostEqual(enc.similarity("use postgres here", "use postgres here", embedder=eid), 1.0)
-                self.assertEqual(enc.similarity("", "", embedder=eid), 0.0)
-                self.assertLess(enc.similarity("upload to s3 nightly", "upload to s4 nightly", embedder=eid), t)
-                self.assertLess(enc.similarity("the api is thread safe", "the api isn't thread safe",
-                                               embedder=eid), t)
+                self.assertAlmostEqual(sim_under(eid, "use postgres here", "use postgres here"), 1.0)
+                self.assertEqual(sim_under(eid, "", ""), 0.0)
+                self.assertLess(sim_under(eid, "upload to s3 nightly", "upload to s4 nightly"), t)
+                self.assertLess(sim_under(eid, "the api is thread safe", "the api isn't thread safe"), t)
                 a = "run the nightly migration before every production deploy of the api"
-                self.assertGreaterEqual(enc.similarity(a, a + " today", embedder=eid), t)
-                self.assertAlmostEqual(enc.similarity("A depends on B", "B depends on A", embedder=eid),
+                self.assertGreaterEqual(sim_under(eid, a, a + " today"), t)
+                self.assertAlmostEqual(sim_under(eid, "A depends on B", "B depends on A"),
                                        enc.VETO_FACTOR * raw_under(eid, "A depends on B", "B depends on A"))
                 self.assertEqual(enc.threshold(eid), max(enc.NEAR_DUPLICATE, enc.threshold(eid)))
                 self.assertGreaterEqual(enc.threshold(eid), 0.88)
@@ -129,7 +136,7 @@ class PerEmbedderDedupTest(unittest.TestCase):
         for name in EMBEDDER_NAMES:
             with self.subTest(embedder=name), activated(name) as eid:
                 a, b = pre + "staging" + post, pre + "prod" + post
-                self.assertAlmostEqual(enc.similarity(a, b, embedder=eid),
+                self.assertAlmostEqual(sim_under(eid, a, b),
                                        raw_under(eid, a, b) * enc.VETO_FACTOR)
 
     def test_encode_end_to_end_distinct_facts_never_merge(self):
@@ -191,7 +198,7 @@ class RestatementLimitsTest(unittest.TestCase):
         for name in EMBEDDER_NAMES:
             with activated(name) as eid:
                 with self.subTest(embedder=name):
-                    self.assertLess(enc.similarity(a, b, embedder=eid), enc.threshold(eid))
+                    self.assertLess(sim_under(eid, a, b), enc.threshold(eid))
 
 
 if __name__ == "__main__":

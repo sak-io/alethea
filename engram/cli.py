@@ -176,6 +176,9 @@ def _fmt_status(r):
         _out("embedder configured: %s   state: %s   falling back: %s   fallbacks: %s" % (
             r.get("embedder_configured"), r.get("embedder_state"),
             "yes" if r.get("embedder_falling_back") else "no", r.get("embedder_fallbacks")))
+        if r.get("embedder_reason") or r.get("embedder_retry_in_s") is not None:
+            _out("embedder reason: %s   next retry in: %ss" % (
+                r.get("embedder_reason") or "-", r.get("embedder_retry_in_s")))
     ls = r.get("last_sleep")
     _out("last sleep: %s" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ls))
                              if ls else "never"))

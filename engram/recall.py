@@ -101,8 +101,19 @@ def _sigmoid(x):
     return e / (1.0 + e)
 
 
+def embed_cue(cue, relevance_floor=True, embedder_id=None):
+    """(embedder_id_used, [cue vector] or [cue vector, core vector]) for `candidates(embedded=)`.
+    Bounded and fail-soft; call it BEFORE taking the engine lock."""
+    cue = _cap(cue)
+    if not cue.strip():
+        return None
+    core = " ".join(t for t in vectorize.tokenize(cue) if t not in STOPWORDS)
+    use_core = bool(relevance_floor and core and core != " ".join(vectorize.tokenize(cue)))
+    return vectorize.embed_batch([cue, core] if use_core else [cue], embedder_id)
+
+
 def candidates(cortex, cue, pool=POOL, embedder_id=None, relevance_floor=True,
-               fts_window=None):
+               fts_window=None, embedded=None):
     """Fused, scored active memories (dicts + lex/sem/relevance/score), best first.
 
     No reinforcement. Vector channel: only rows with the same embedder_id among the
@@ -132,7 +143,11 @@ def candidates(cortex, cue, pool=POOL, embedder_id=None, relevance_floor=True,
     core = " ".join(t for t in vectorize.tokenize(cue) if t not in STOPWORDS)
     use_core = bool(relevance_floor and core and core != " ".join(vectorize.tokenize(cue)))
     # One embedder for the whole call (the configured one, or hashed after a failure).
-    embedder_id, qvs = vectorize.embed_batch([cue, core] if use_core else [cue], embedder_id)
+    if embedded is not None:  # precomputed by embed_cue() outside the lock
+        embedder_id, qvs = embedded[0], list(embedded[1])
+        use_core = use_core and len(qvs) > 1
+    else:
+        embedder_id, qvs = vectorize.embed_batch([cue, core] if use_core else [cue], embedder_id)
     qv = qvs[0]
     sem_gain = vectorize.tuning(embedder_id, "SEM_GAIN", SEM_GAIN)
     sem_min = vectorize.tuning(embedder_id, "SEM_MIN_COS", SEM_MIN_COS)
@@ -237,7 +252,7 @@ def _identity_rows(cortex, k):
 
 
 def recall(cortex, cue, k=K, pool=POOL, reinforce=True, embedder_id=None,
-           repo_root=None, cwd=None, scope="all"):
+           repo_root=None, cwd=None, scope="all", embedded=None):
     """Return up to k results, each with `via` in {identity, hit, spread}; reinforce them.
 
     Same-repo hits get a SCOPE_BOOST score multiplier (soft); scope="repo" additionally
@@ -258,7 +273,7 @@ def recall(cortex, cue, k=K, pool=POOL, reinforce=True, embedder_id=None,
             m["via"] = "identity"
             seen.add(m["id"])
             results.append(m)
-    hits = candidates(cortex, cue, pool=pool, embedder_id=embedder_id)
+    hits = candidates(cortex, cue, pool=pool, embedder_id=embedder_id, embedded=embedded)
     if repo_root or cwd:
         for m in hits:
             if in_scope(m):

@@ -259,9 +259,10 @@ print([m for m in ('fastembed','onnxruntime','numpy','tokenizers','huggingface_h
         r = run_py("""
 import sys, tempfile, json
 sys.modules['fastembed'] = None   # simulate: package not installed
-from engram import daemon
+from engram import daemon, vectorize
 home = tempfile.mkdtemp(prefix='eg')
 e = daemon.Engram(home=home, env={"ENGRAM_HOME": home, "ENGRAM_EMBEDDER": "fastembed:sentence-transformers/all-MiniLM-L6-v2"})
+vectorize.wait_settled(10)   # the model load runs on a background thread in the daemon
 a = e.handle("remember", {"content": "the billing service uses postgres"})
 b = e.handle("recall", {"cue": "billing postgres"})
 s = e.handle("status", {})
@@ -361,7 +362,7 @@ class FastEmbedClassTest(Isolated):
         self.assertEqual(tuple(row), ("%s:384" % MINILM, 384 * 4))
         st = vectorize.status()
         self.assertEqual((st["embedder_state"], st["embedder_dim"], st["embedder_falling_back"]),
-                         ("active", 384, False))
+                         ("ready", 384, False))
 
     def test_numpy_like_vectors_are_accepted(self):
         class Arr:  # iterable of numpy-ish scalars
@@ -466,6 +467,62 @@ class ThresholdsTest(Isolated):
                 cx.insert("semantic", t, vector=fake_dense.fake_vector(t) and vectorize.embed_batch([t])[1][0],
                           embedder_id=inst.id)
             self.assertEqual(consolidate.recombine(cx), expect)
+
+
+class RangesAndCachesTest(Isolated):
+    def test_declared_values_out_of_range_fall_back_to_defaults(self):
+        bad = {"SEM_GAIN": [float("nan"), float("inf"), 0.0, -1.0, 100.0],
+               "SEM_MIN_COS": [float("nan"), -0.1, 1.5, float("inf")],
+               "RECOMBINE_LO": [float("nan"), -1.0, 2.0], "RECOMBINE_HI": [float("inf"), -0.5, 9.0],
+               "NEAR_DUPLICATE": [float("nan"), 1.5, -1.0]}
+        for name, values in bad.items():
+            for v in values:
+                with self.subTest(name=name, value=v):
+                    vectorize._reset_for_tests()
+                    inst = type("T", (Broken,), {name: v})("ok")
+                    vectorize.register_scheme("tuned", lambda arg, inst=inst: inst)
+                    vectorize.configure("tuned:x")
+                    vectorize.embed_batch(["load"])
+                    self.assertEqual(vectorize.tuning(inst.id, name, -7.0), -7.0)
+        vectorize._reset_for_tests()
+        inst = type("T", (Broken,), {"SEM_GAIN": 2.5, "SEM_MIN_COS": 0.4})("ok")
+        vectorize.register_scheme("tuned", lambda arg: inst)
+        vectorize.configure("tuned:x")
+        vectorize.embed_batch(["load"])
+        self.assertEqual(vectorize.tuning(inst.id, "SEM_GAIN", 1.8), 2.5)
+        self.assertEqual(vectorize.tuning(inst.id, "SEM_MIN_COS", 0.3), 0.4)
+
+    def test_decode_cache_is_bounded_by_total_floats(self):
+        vectorize._dec.clear()
+        vectorize._dec_floats = 0
+        for dim in (1536, 512):
+            for i in range(1500):
+                blob = vectorize.to_bytes([float(i % 7 + 1)] * (dim - 1) + [float(i)])
+                vectorize.cosine(blob, blob)
+                self.assertLessEqual(vectorize._dec_floats, vectorize.DECODE_CACHE_FLOATS)
+                self.assertLessEqual(len(vectorize._dec), vectorize.DECODE_CACHE_ENTRIES)
+        self.assertEqual(vectorize._dec_floats, sum(len(v) for v, _n in vectorize._dec.values()))
+        self.assertAlmostEqual(vectorize.cosine(blob, blob), 1.0, places=5)
+
+
+class LabelTest(Isolated):
+    def test_configured_but_unavailable_embedder_never_labels_hashed_vectors_with_its_id(self):
+        with mock.patch.dict(sys.modules, {"fastembed": None}), self.err():
+            vectorize.configure(MINILM)
+            cx = Cortex(":memory:")
+            self.addCleanup(cx.close)
+            for explicit in (None, MINILM + ":384", "fastembed:other/model:768"):
+                r = enc.remember(cx, "Label test %s: the ledger uses postgres" % explicit, embedder_id=explicit)
+                self.assertEqual(r["status"], "created")
+            ids = {row[0] for row in cx.db.execute("SELECT embedder_id FROM memories")}
+        self.assertEqual(ids, {vectorize.EMBEDDER_ID})
+
+    def test_explicit_unknown_label_is_stored_as_given_with_hashed_vectors(self):
+        cx = Cortex(":memory:")
+        self.addCleanup(cx.close)
+        enc.remember(cx, "Legacy label fact about invoices", embedder_id="other:1")
+        row = cx.db.execute("SELECT embedder_id, length(vector) FROM memories").fetchone()
+        self.assertEqual(tuple(row), ("other:1", 4 * vectorize.DIM))
 
 
 class DimensionsTest(Isolated):
@@ -574,7 +631,7 @@ class StatusAndDaemonTest(Isolated):
         self.assertEqual(vectorize.status()["embedder_id"], vectorize.EMBEDDER_ID)
         vectorize.embed_batch(["x y"])
         st = vectorize.status()
-        self.assertEqual((st["embedder_state"], st["embedder_id"]), ("active", "fake-dense-v1:384"))
+        self.assertEqual((st["embedder_state"], st["embedder_id"]), ("ready", "fake-dense-v1:384"))
 
     def test_daemon_status_and_cli_text(self):
         from engram import cli, mcp_server
@@ -582,6 +639,7 @@ class StatusAndDaemonTest(Isolated):
         with mock.patch.dict(sys.modules, {"fastembed": None}), self.err():
             e = daemon.Engram(home=home, env={"ENGRAM_HOME": home, "ENGRAM_EMBEDDER": MINILM})
             self.addCleanup(e.cortex.close)
+            vectorize.wait_settled(10)
             self.assertEqual(e.handle("remember", {"content": "we deploy every friday afternoon"})["status"],
                              "created")
             s = e.handle("status", {})
