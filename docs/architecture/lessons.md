@@ -64,3 +64,9 @@ The 2000-row FTS window in the dedup path is a deliberate, owner-accepted trade-
 - Real-model cosine distributions are unmeasured: thresholds stay at the hashed defaults until someone measures a real model (see ADR 0010).
 - Any plugin call that is out of our process control (a model load or download, an embedding call, later a remote API) must be (1) outside every lock another verb needs, (2) bounded by a timeout, (3) behind a circuit breaker, (4) off the request path when it can take longer than the hook budget (background load, hashed meanwhile). The first T25 version held the FairLock across embedder calls: a 6 s embedder made `status`/`recall` return offline, a real fastembed with the model hub blocked stalled the first request 40 s (the library's own retry sleeps). `tests/test_embedder_daemon.py` is the template for testing this for any new plugin.
 
+
+## LLM distillation (T27)
+- Treat any model output (host or API) as hostile input: it enters only via `distill.Service.submit`, never `remember`; the gate, plain-render and no-promotion-before-reinforcement are the defence, not the prompt. A dedup merge must not count as reinforcement or repeated submissions self-promote.
+- The briefing had no reinforcement floor (only export did); `encode.withheld` now closes that for model-written memories.
+- The gate scores salience by marker words, so plain procedures and open issues are often dropped (salience 0); such episodes fall back to extractive after the TTL. Quality unmeasured; no real model or provider was contacted (stubs only).
+- Remote-call template again (lesson T25): idle cycle only, no lock, total timeout in a worker thread, breaker, persisted daily cap, strict parse, no redirects, key from env only.

@@ -1,6 +1,6 @@
 # Configuration
 
-Engram is configured with environment variables. Precedence: environment, then `<ENGRAM_HOME>/config.json`, then defaults. Four keys can also be set in `config.json` (marked "file" below); the rest are environment-only.
+Engram is configured with environment variables. Precedence: environment, then `<ENGRAM_HOME>/config.json`, then defaults. Several keys (marked "file") can also be set in `config.json` (marked "file" below); the rest are environment-only.
 
 **Platform: POSIX only** (Linux, macOS, BSD). The daemon needs `fcntl` and `AF_UNIX`. On a platform without them the daemon exits with code 2 and the message `unsupported platform: POSIX only`; `mnemo`, the client and the MCP server stay fail-soft (exit 0, or an "offline" result) and report the same message.
 
@@ -20,7 +20,16 @@ Boolean variables accept `1`, `true`, `yes`, `on` (case-insensitive); anything e
 | `ENGRAM_SLEEP_INTERVAL` (file) | `900` | daemon | Minimum seconds between automatic sleep cycles. |
 | `ENGRAM_IDLE_SLEEP` (file) | `180` | daemon | Seconds of inactivity required before an automatic sleep cycle starts. |
 | `ENGRAM_EMBEDDER` (env or file) | `hash` | daemon | Which embedder produces vectors. `hash` (default, stdlib only, offline) or `fastembed:<model>`, for example `fastembed:sentence-transformers/all-MiniLM-L6-v2` (needs `pip install 'engram-memory[local]'`). `openai:<model>` is reserved for T26 and is an unknown value today. An unknown value, a missing package, a model that cannot be loaded or any runtime error falls back to the hashed embedder (see "Embedder plugins" below). |
-| `ENGRAM_LLM_CONSOLIDATE` (file) | false | MCP server, daemon | **Reserved (not yet implemented).** No LLM consolidation exists. The only effect today is that the MCP server also advertises the `engram_consolidate_pending` tool (which runs the normal extractive consolidation). The daemon prints one stderr warning if it is set. |
+| `ENGRAM_LLM_CONSOLIDATE` (file) | false | MCP server, daemon | Master switch for LLM-assisted consolidation (ADR 0012). **Privacy: with it on, host mode shows redacted episode transcripts to your MCP host's model; with `ENGRAM_LLM_API` set they are sent to that API.** Off: nothing runs, nothing is queued, nothing is imported. On (host mode): episodes are queued instead of summarised until the host answers via `engram_consolidate_pending`/`engram_distill_submit`, else the extractive path after the TTL. Also lists those two MCP tools. |
+| `ENGRAM_LLM_PENDING_TTL` (file) | `259200` | daemon | Seconds a queued episode waits for distillation (3 days, minimum 60) before it takes the extractive path. |
+| `ENGRAM_LLM_API` (file) | unset | daemon | `openai` or `anthropic`: direct-API mode (needs `ENGRAM_LLM_CONSOLIDATE=1` and `ENGRAM_LLM_MODEL`). **Privacy warning: redacted transcripts are sent to the API host during idle sleep cycles. Redaction is best-effort.** An invalid configuration turns the feature off and `status` says why. |
+| `ENGRAM_LLM_ALLOW_REMOTE` (file) | false | daemon | Required for any non-loopback API host: your acknowledgement that transcripts leave this machine. Without it no connection is ever opened. |
+| `ENGRAM_LLM_URL` (file) | provider default | daemon | Endpoint (`https://api.openai.com/v1/chat/completions`, `https://api.anthropic.com/v1/messages`). https is required for non-loopback hosts; credentials in the URL are refused; redirects are never followed. A loopback `http://` URL (local server) is allowed. |
+| `ENGRAM_LLM_MODEL` (file) | unset | daemon | Model name; required in api mode. |
+| `ENGRAM_LLM_API_KEY` | unset | daemon | API key. **Environment only**: never read from `config.json`, never logged, shown or stored. Required for remote hosts. |
+| `ENGRAM_LLM_BUDGET` (file) | `5` | daemon | Api mode: episodes sent per sleep cycle. |
+| `ENGRAM_LLM_DAILY_CAP` (file) | `50` | daemon | Api mode: calls per UTC day (persisted across restarts). |
+| `ENGRAM_LLM_TIMEOUT` (file) | `30` | daemon | Api mode: seconds per call, 0.05 to 120. |
 | `ENGRAM_HOOK_DEBUG` | unset | Claude Code hook | `1` makes `engram/hooks/engram_hook.py` write one diagnostic line to stderr (event outcome and elapsed ms; never prompt text, tokens or memory content). Otherwise the hook is silent: stdout is empty or one JSON object, exit code always 0. |
 | `MNEMO_STRICT` | unset | `mnemo` | `1` makes `mnemo` exit 3 when the daemon is offline and 4 for commands not yet available, instead of exiting 0 (same as `--strict`). |
 | `ENGRAM_SLOW_TESTS` | unset | tests | Any non-empty value enables the slow sleep-cycle benchmarks (about +60 s). |
