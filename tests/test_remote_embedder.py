@@ -392,13 +392,11 @@ class DaemonContainment(unittest.TestCase):
         self.assertTrue(r["ok"])
         self.assertLess(took, 0.5 + 0.5, took)
         self.assertEqual(d.ids()[-1][0], HASH_ID)
-        worst = 0.0
-        for verb, p in (("status", {}), ("ping", {}), ("recall", {"cue": "slow remote server"}),
-                        ("briefing", {})):
+        for verb, p in (("status", {}), ("ping", {}), ("briefing", {})):
             d.call(verb, p)
-            worst = max(worst, d.last_s)
-            print(verb, round(d.last_s, 3))
-        self.assertLess(worst, 0.5)
+            self.assertLess(d.last_s, 0.5, verb)
+        d.call("recall", {"cue": "slow remote server"})   # needs the cue vector: timeout, then hashed
+        self.assertLess(d.last_s, 0.5 + 0.5)
 
     def test_server_errors_open_the_breaker_and_no_calls_happen_in_cooldown(self):
         d = self.start()
