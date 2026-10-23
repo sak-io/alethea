@@ -1,0 +1,3 @@
+[mcp_servers.engram]
+command = "/ABSOLUTE/PATH/TO/python"
+args = ["-I", "-m", "engram.mcp_server"]

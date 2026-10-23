@@ -498,6 +498,14 @@ def run(args, out=None, err=None):
 
 def _run(args, out, err):
     cmd = args.cmd
+    host = getattr(args, "host", None)
+    if getattr(args, "print", None) or host == "cursor" or host is None:
+        from engram import install_hosts
+        if getattr(args, "print", None):
+            return install_hosts.run_print(args, out, err)
+        if host == "cursor":
+            return install_hosts.run_cursor(args, out, err)
+        raise InstallError("name a host (claude-code or cursor), or use --print mcp")
     scope = getattr(args, "scope", None)
     if cmd == "install" and getattr(args, "status", False):
         rc = 0
