@@ -66,9 +66,12 @@ class RDaemon:
     def reembed(self, action, **kw):
         return self.call("reembed", dict(kw, action=action))
 
-    def wait_state(self, states, timeout=20):
+    def wait_state(self, states, timeout=60):
+        """Wait on conditions, not time: the run is in one of `states` AND its thread has
+        returned (a paused/done state is published just before the thread exits)."""
         def ok():
-            return self.reembed("status")["reembed"]["state"] in states
+            r = self.reembed("status")["reembed"]
+            return r["state"] in states and not r["active"]
         return wait_for(ok, timeout)
 
     def stop(self):
