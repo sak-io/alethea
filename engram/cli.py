@@ -95,8 +95,10 @@ def build_parser():
     s.add_argument("--if-changed", action="store_true",
                    help="only refresh existing Engram-owned files; create nothing, quiet")
     for name, verb in (("install", "install"), ("uninstall", "remove")):
-        s = add(name, "%s Engram's hooks for a host (only claude-code so far)" % verb)
-        s.add_argument("host", choices=["claude-code"])
+        s = add(name, "%s Engram for a host: claude-code (hooks) or cursor (MCP + rule); "
+                      "`install --print mcp` prints an MCP-only snippet for other hosts" % verb)
+        s.add_argument("host", nargs="?" if name == "install" else None,
+                       choices=["claude-code", "cursor"])
         s.add_argument("--scope", choices=["user", "local", "project"], default=None,
                        help="user (default; ~/.claude/settings.json or $CLAUDE_CONFIG_DIR), "
                             "local (<git root>/.claude/settings.local.json) or project "
@@ -107,6 +109,11 @@ def build_parser():
                            help="show where hooks are installed (all scopes unless --scope)")
             s.add_argument("--mcp", action="store_true",
                            help="also register the MCP server with `claude mcp add`")
+            s.add_argument("--print", choices=["mcp"], default=None,
+                           help="print an MCP-only config snippet (Codex, Gemini, Grok, ...) to "
+                                "stdout and write nothing; no hooks")
+            s.add_argument("--format", choices=["json", "toml"], default="json",
+                           help="snippet format for --print (default json)")
     s = add("reembed", "re-embed stored vectors under the configured embedder (resumable, "
                        "background). Only a REMOTE target (openai:) needs --yes, because it sends "
                        "memory text to another host; without --yes it only shows what would be "

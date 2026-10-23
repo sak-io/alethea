@@ -1,0 +1,12 @@
+{
+  "_UNVERIFIED": "UNVERIFIED SKETCH, NOT TESTED AGAINST A REAL CURSOR. The hooks.json schema, event names and payload below are from memory of Cursor's beta hooks docs. Engram's hook script only understands Claude Code event names (SessionStart, UserPromptSubmit, Stop, SessionEnd, PreCompact), so with Cursor's event names it exits 0 and does nothing. Delete this key before use; do not rely on this file.",
+  "version": 1,
+  "hooks": {
+    "beforeSubmitPrompt": [
+      {"command": "/ABSOLUTE/PATH/TO/python -I -m engram.hooks.engram_hook"}
+    ],
+    "stop": [
+      {"command": "/ABSOLUTE/PATH/TO/python -I -m engram.hooks.engram_hook"}
+    ]
+  }
+}

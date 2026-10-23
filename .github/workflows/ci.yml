@@ -55,3 +55,12 @@ jobs:
           # uninstall deletes a settings file it created (and its empty directory); a pre-existing
           # file stays and must no longer contain Engram's hooks
           python -c "import json, os; p = os.path.expanduser('~/.claude/settings.json'); assert (not os.path.exists(p)) or 'hooks' not in json.load(open(p)), p"
+          # Cursor: MCP registration only (no hooks), same lifecycle; and the MCP-only snippet
+          mnemo install cursor --dry-run
+          test ! -e "$HOME/.cursor"
+          mnemo install cursor
+          python -c "import json, os; d = json.load(open(os.path.expanduser('~/.cursor/mcp.json'))); assert d['mcpServers']['engram']['args'] == ['-I', '-m', 'engram.mcp_server'], d"
+          mnemo install cursor
+          mnemo uninstall cursor
+          test ! -e "$HOME/.cursor"
+          mnemo install --print mcp | python -c "import json, sys; assert 'engram' in json.load(sys.stdin)['mcpServers']"
