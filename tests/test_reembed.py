@@ -12,7 +12,7 @@ import time
 import unittest
 from unittest import mock
 
-from engram import client, reembed, vectorize
+from alethea import client, reembed, vectorize
 from tests.daemon_helpers import make_home, spawn, wait_up
 from tests.remote_helpers import (AWS, GHP, MODEL, PWD, SECRET_TEXT, SECRETS, RDaemon, db_rows,
                                   remote_env, seed)
@@ -61,11 +61,11 @@ class Base(unittest.TestCase):
         return d
 
     def snapshot(self, d):
-        with d.engram.lock:
-            return [tuple(r) for r in d.engram.cortex.db.execute(
+        with d.alethea.lock:
+            return [tuple(r) for r in d.alethea.cortex.db.execute(
                 "SELECT id,kind,content,gist,keywords,salience,strength,access_count,created_at,"
                 "last_access,status,meta FROM memories ORDER BY rowid")], [
-                tuple(r) for r in d.engram.cortex.db.execute("SELECT * FROM edges ORDER BY 1,2,3")]
+                tuple(r) for r in d.alethea.cortex.db.execute("SELECT * FROM edges ORDER BY 1,2,3")]
 
     def run_to_end(self, d, **kw):
         r = d.reembed("start", confirm=True, **kw)
@@ -86,8 +86,8 @@ class PlanAndConsent(Base):
         self.assertEqual(p["with_identity"]["memories"], 11)
         self.assertTrue(p["remote"])
         self.assertEqual(p["host"], "127.0.0.1:%d" % self.stub.port)
-        with d.engram.lock:
-            chars = d.engram.cortex.db.execute(
+        with d.alethea.lock:
+            chars = d.alethea.cortex.db.execute(
                 "SELECT SUM(LENGTH(content)) FROM memories WHERE kind!='identity'").fetchone()[0]
         self.assertEqual(p["chars"], chars)
         self.assertEqual(len(self.stub.inputs), before)
@@ -160,9 +160,9 @@ class Migration(Base):
         home = self.hashed_store(2, identity=False)
         d = RDaemon({}, home=home)
         self.daemons.append(d)
-        with d.engram.lock:     # simulate an OLD row that predates redaction
-            d.engram.cortex.db.execute("UPDATE memories SET content=? WHERE rowid=1", (SECRET_TEXT,))
-            d.engram.cortex.db.commit()
+        with d.alethea.lock:     # simulate an OLD row that predates redaction
+            d.alethea.cortex.db.execute("UPDATE memories SET content=? WHERE rowid=1", (SECRET_TEXT,))
+            d.alethea.cortex.db.commit()
         d.stop()
         d = self.remote(home)
         self.run_to_end(d)
@@ -207,11 +207,11 @@ class Migration(Base):
         d = self.remote(self.hashed_store(2, identity=False))
         rows = d.rows()
         stale = [(r["rid"], r["id"], r["content"], r["embedder_id"]) for r in rows]
-        with d.engram.lock:
-            d.engram.cortex.db.execute("UPDATE memories SET content='edited meanwhile' WHERE id=?",
+        with d.alethea.lock:
+            d.alethea.cortex.db.execute("UPDATE memories SET content='edited meanwhile' WHERE id=?",
                                        (rows[0]["id"],))
-            d.engram.cortex.db.commit()
-        d.engram.reembed._write(stale, [b"\x00" * 64] * 2, OPENAI_ID)
+            d.alethea.cortex.db.commit()
+        d.alethea.reembed._write(stale, [b"\x00" * 64] * 2, OPENAI_ID)
         after = {r["id"]: r for r in d.rows()}
         self.assertEqual(after[rows[0]["id"]]["embedder_id"], HASH_ID)
         self.assertEqual(after[rows[1]["id"]]["embedder_id"], OPENAI_ID)
@@ -229,8 +229,8 @@ class Progress(Base):
         self.assertGreater(st["cursor"], 0)
         self.assertIn("http-5xx", st["last_error"])
         self.assertNotIn(KEY, json.dumps(st))
-        with d.engram.lock:
-            persisted = json.loads(d.engram.cortex.meta_get("reembed"))
+        with d.alethea.lock:
+            persisted = json.loads(d.alethea.cortex.meta_get("reembed"))
         self.assertEqual((persisted["state"], persisted["done"]), ("paused", 6))
         self.assertTrue(d.status()["reembed"]["state"] == "paused")
         # heal the server and the breaker; the run resumes where it stopped
@@ -248,7 +248,7 @@ class Progress(Base):
 
     def test_concurrent_writes_and_low_latency_during_a_run(self):
         # generous call timeout: this test is about interleaving, not about timing the embedder
-        d = self.remote(self.hashed_store(40, identity=False), ENGRAM_EMBEDDER_TIMEOUT="8")
+        d = self.remote(self.hashed_store(40, identity=False), ALETHEA_EMBEDDER_TIMEOUT="8")
         self.stub.delay = 0.1
         d.reembed("start", confirm=True, batch=4)
         worst = 0.0
@@ -303,7 +303,7 @@ class Progress(Base):
         done = r["reembed"]["done"]
         time.sleep(0.5)
         self.assertEqual(d.reembed("status")["reembed"]["done"], done)
-        self.assertFalse(d.engram.reembed.status()["active"])
+        self.assertFalse(d.alethea.reembed.status()["active"])
         kinds = {e for e, _ in d.ids()}
         self.assertEqual(kinds, {HASH_ID, OPENAI_ID})
         self.assertTrue(d.call("recall", {"cue": "component protocol"})["results"])
@@ -336,7 +336,7 @@ class CancelAndHost(Base):
 
         def embed_then_cancel(texts, eid=None):
             out = real(texts, eid)
-            d.engram.reembed._stop.set()       # cancel lands after the embed, before the write
+            d.alethea.reembed._stop.set()       # cancel lands after the embed, before the write
             return out
         with mock.patch.object(reembed.vectorize, "embed_batch", embed_then_cancel):
             d.reembed("start", confirm=True, batch=3)
@@ -385,7 +385,7 @@ class SettleRace(Base):
         with mock.patch.object(reembed.Reembedder, "_persist", slow_persist):
             d.reembed("start", confirm=True, batch=2)
             self.assertTrue(wait_for(lambda: d.reembed("status")["reembed"]["state"] == "paused", 30))
-            self.assertTrue(d.engram.reembed.status()["active"])         # the window is open
+            self.assertTrue(d.alethea.reembed.status()["active"])         # the window is open
             self.stub.fail_after = None
             with vectorize._lock:
                 vectorize._open_until = time.monotonic() - 1
@@ -410,7 +410,7 @@ class KillNineResume(unittest.TestCase):
         self.addCleanup(stub.stop)
         home = make_home()
         self.addCleanup(shutil.rmtree, home, True)
-        cenv = {"ENGRAM_HOME": home}
+        cenv = {"ALETHEA_HOME": home}
         procs = []
         self.addCleanup(lambda: [p.kill() for p in procs if p.poll() is None])
         p = spawn(home)
@@ -421,7 +421,7 @@ class KillNineResume(unittest.TestCase):
                 i, i * 5 + 1, i * 3 + 2)}, timeout=5, env=cenv)["ok"])
         p.terminate()
         p.communicate(timeout=15)
-        env = remote_env(stub, ENGRAM_EMBEDDER_TIMEOUT="3")
+        env = remote_env(stub, ALETHEA_EMBEDDER_TIMEOUT="3")
         stub.delay = 0.15
         p = spawn(home, env)
         procs.append(p)
@@ -454,7 +454,7 @@ class CliTests(Base):
     def setUp(self):
         super().setUp()
         self.d = self.remote(self.hashed_store(8))
-        self.env = {"ENGRAM_EMBEDDER": "x"}    # the CLI itself never reads embedder config
+        self.env = {"ALETHEA_EMBEDDER": "x"}    # the CLI itself never reads embedder config
 
     def cli(self, *args, **kw):
         return run(self.d.home, *args, **kw)
@@ -504,7 +504,7 @@ class CliTests(Base):
         self.assertEqual(self.cli("reembed", "--status", "--cancel").returncode, 2)
 
     def test_offline_is_fail_soft(self):
-        r = run("/nonexistent-engram-home", "reembed", "--yes")
+        r = run("/nonexistent-alethea-home", "reembed", "--yes")
         self.assertEqual(r.returncode, 0)
         self.assertNotIn("Traceback", r.stderr)
 

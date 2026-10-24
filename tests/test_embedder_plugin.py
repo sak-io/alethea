@@ -10,9 +10,9 @@ import time
 import unittest
 from unittest import mock
 
-from engram import consolidate, daemon, embedders_ext, recall, vectorize
-from engram import encode as enc
-from engram.cortex import Cortex
+from alethea import consolidate, daemon, embedders_ext, recall, vectorize
+from alethea import encode as enc
+from alethea.cortex import Cortex
 from tests import fake_dense
 from tests.daemon_helpers import ROOT, make_home
 from tests.embedder_helpers import MINILM, StubTextEmbedding, activated
@@ -23,7 +23,7 @@ SECRET = "TOPSECRET-MEMORY-TEXT-4711"
 def run_py(code, env=None, timeout=60):
     """Run `code` in an isolated child (-I) with the repo root on sys.path; returns stdout."""
     e = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
-    e.pop("ENGRAM_EMBEDDER", None)
+    e.pop("ALETHEA_EMBEDDER", None)
     e.update(env or {})
     r = subprocess.run([sys.executable, "-I", "-c", "import sys; sys.path.insert(0, %r)\n%s" % (ROOT, code)],
                        capture_output=True, text=True, env=e, timeout=timeout)
@@ -157,7 +157,7 @@ class FailSoftTest(Isolated):
         out = buf.getvalue()
         self.assertEqual(out.count("\n"), 1)
         self.assertIn("unavailable", out)
-        self.assertIn("engram-memory[local]", out)
+        self.assertIn("alethea[local]", out)
 
     def test_model_load_failure_falls_back_and_retries_only_after_backoff(self):
         calls = []
@@ -208,20 +208,20 @@ class FailSoftTest(Isolated):
 
 
 class LazyImportTest(unittest.TestCase):
-    EXTRAS = ("fastembed", "onnxruntime", "numpy", "tokenizers", "huggingface_hub", "engram.embedders_ext")
+    EXTRAS = ("fastembed", "onnxruntime", "numpy", "tokenizers", "huggingface_hub", "alethea.embedders_ext")
 
     def test_default_embedder_imports_no_extras(self):
         code = """
 import sys, tempfile, json
-from engram import vectorize, encode, recall, consolidate, daemon
-from engram.cortex import Cortex
+from alethea import vectorize, encode, recall, consolidate, daemon
+from alethea.cortex import Cortex
 cx = Cortex(":memory:")
 encode.remember(cx, "we deploy the billing service every friday")
 encode.remember(cx, "we deploy the billing service every friday!")
 recall.recall(cx, "when do we deploy billing")
 consolidate.recombine(cx)
 home = tempfile.mkdtemp(prefix='eg')
-e = daemon.Engram(home=home, env={"ENGRAM_HOME": home})
+e = daemon.Alethea(home=home, env={"ALETHEA_HOME": home})
 for verb, p in (("remember", {"content": "deploys need review before production"}),
                 ("recall", {"cue": "deploy review"}), ("observe", {"content": "we use redis for caching"}),
                 ("reflect", {"content": "reviews gate deploys"}), ("briefing", {}), ("sleep", {}),
@@ -240,17 +240,17 @@ print(json.dumps({"bad": [m for m in %r if m in sys.modules], "state": vectorize
     def test_selecting_hash_explicitly_imports_no_extras(self):
         r = run_py("""
 import sys
-from engram import vectorize
+from alethea import vectorize
 vectorize.configure("hash")
 vectorize.embed_batch(["a b c"])
 print([m for m in %r if m in sys.modules])
-""" % (list(self.EXTRAS),), env={"ENGRAM_EMBEDDER": "hash"})
+""" % (list(self.EXTRAS),), env={"ALETHEA_EMBEDDER": "hash"})
         self.assertEqual(r.stdout.strip(), "[]", r.stderr)
 
     def test_embedders_ext_itself_imports_no_third_party_package(self):
         r = run_py("""
 import sys
-import engram.embedders_ext
+import alethea.embedders_ext
 print([m for m in ('fastembed','onnxruntime','numpy','tokenizers','huggingface_hub') if m in sys.modules])
 """)
         self.assertEqual(r.stdout.strip(), "[]", r.stderr)
@@ -259,9 +259,9 @@ print([m for m in ('fastembed','onnxruntime','numpy','tokenizers','huggingface_h
         r = run_py("""
 import sys, tempfile, json
 sys.modules['fastembed'] = None   # simulate: package not installed
-from engram import daemon, vectorize
+from alethea import daemon, vectorize
 home = tempfile.mkdtemp(prefix='eg')
-e = daemon.Engram(home=home, env={"ENGRAM_HOME": home, "ENGRAM_EMBEDDER": "fastembed:sentence-transformers/all-MiniLM-L6-v2"})
+e = daemon.Alethea(home=home, env={"ALETHEA_HOME": home, "ALETHEA_EMBEDDER": "fastembed:sentence-transformers/all-MiniLM-L6-v2"})
 vectorize.wait_settled(10)   # the model load runs on a background thread in the daemon
 a = e.handle("remember", {"content": "the billing service uses postgres"})
 b = e.handle("recall", {"cue": "billing postgres"})
@@ -287,12 +287,12 @@ class RealPackageTest(unittest.TestCase):
     def setUpClass(cls):
         r = run_py("import fastembed; print(fastembed.__version__ if hasattr(fastembed, '__version__') else 'ok')")
         if r.returncode != 0:
-            raise unittest.SkipTest("fastembed package not installed (pip install 'engram-memory[local]')")
+            raise unittest.SkipTest("fastembed package not installed (pip install 'alethea[local]')")
 
     def test_selected_import_path_loads_the_real_package(self):
         r = run_py("""
 import sys
-from engram import embedders_ext
+from alethea import embedders_ext
 TE = embedders_ext._import_text_embedding()
 print(TE.__name__, 'fastembed' in sys.modules, 'onnxruntime' in sys.modules or 'numpy' in sys.modules)
 """)
@@ -303,8 +303,8 @@ print(TE.__name__, 'fastembed' in sys.modules, 'onnxruntime' in sys.modules or '
         cache = tempfile.mkdtemp(prefix="fe")
         r = run_py("""
 import sys, tempfile, json
-from engram import vectorize
-vectorize.configure("fastembed:engram-test/this-model-does-not-exist")
+from alethea import vectorize
+vectorize.configure("fastembed:alethea-test/this-model-does-not-exist")
 eid, (v,) = vectorize.embed_batch(["hello world"])
 print(json.dumps({"eid": eid, "same": v == vectorize.embed("hello world"), "st": vectorize.status()}))
 """, env={"HF_HUB_OFFLINE": "1", "FASTEMBED_CACHE_PATH": cache, "HF_HOME": cache}, timeout=120)
@@ -317,11 +317,11 @@ print(json.dumps({"eid": eid, "same": v == vectorize.embed("hello world"), "st":
         self.assertIn("(load ", r.stderr)
 
     def test_real_model_if_available(self):
-        """Needs the actual MiniLM weights already cached (set ENGRAM_TEST_REAL_MODEL=1 to allow a
+        """Needs the actual MiniLM weights already cached (set ALETHEA_TEST_REAL_MODEL=1 to allow a
         download); skipped (never failed) when they cannot be loaded."""
         r = run_py("""
 import json
-from engram import vectorize, embedders_ext
+from alethea import vectorize, embedders_ext
 try:
     e = embedders_ext.make_fastembed("sentence-transformers/all-MiniLM-L6-v2")
 except Exception as ex:
@@ -329,7 +329,7 @@ except Exception as ex:
 else:
     a, b = e.embed("enable auth"), e.embed("disable auth")
     print(json.dumps({"dim": e.dim, "id": e.id, "cos": vectorize.cosine(a, b)}))
-""", env=({} if os.environ.get("ENGRAM_TEST_REAL_MODEL") else {"HF_HUB_OFFLINE": "1"}), timeout=180)
+""", env=({} if os.environ.get("ALETHEA_TEST_REAL_MODEL") else {"HF_HUB_OFFLINE": "1"}), timeout=180)
         out = json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {"skip": "no output"}
         if "skip" in out:
             self.skipTest("real MiniLM model unavailable here (%s); real-model path is UNVERIFIED" % out["skip"])
@@ -634,10 +634,10 @@ class StatusAndDaemonTest(Isolated):
         self.assertEqual((st["embedder_state"], st["embedder_id"]), ("ready", "fake-dense-v1:384"))
 
     def test_daemon_status_and_cli_text(self):
-        from engram import cli, mcp_server
+        from alethea import cli, mcp_server
         home = make_home()
         with mock.patch.dict(sys.modules, {"fastembed": None}), self.err():
-            e = daemon.Engram(home=home, env={"ENGRAM_HOME": home, "ENGRAM_EMBEDDER": MINILM})
+            e = daemon.Alethea(home=home, env={"ALETHEA_HOME": home, "ALETHEA_EMBEDDER": MINILM})
             self.addCleanup(e.cortex.close)
             vectorize.wait_settled(10)
             self.assertEqual(e.handle("remember", {"content": "we deploy every friday afternoon"})["status"],
@@ -655,7 +655,7 @@ class StatusAndDaemonTest(Isolated):
         self.assertIn("falling back: yes", buf.getvalue())
 
     def test_default_status_text_unchanged(self):
-        from engram import mcp_server
+        from alethea import mcp_server
         line = mcp_server.render_status(dict(vectorize.status(), total=0, journal_pending=0))
         self.assertNotIn("falling_back", line)
         self.assertIn("embedder=hashed-ngram-v1:512", line)
@@ -664,8 +664,8 @@ class StatusAndDaemonTest(Isolated):
         with mock.patch.object(daemon, "_reserved_warned", False):
             buf = io.StringIO()
             with contextlib.redirect_stderr(buf):
-                daemon.warn_reserved({"ENGRAM_EMBEDDER": "fastembed:some/model"})
-                daemon.warn_reserved({"ENGRAM_EMBEDDER": "hash"})
+                daemon.warn_reserved({"ALETHEA_EMBEDDER": "fastembed:some/model"})
+                daemon.warn_reserved({"ALETHEA_EMBEDDER": "hash"})
             self.assertEqual(buf.getvalue(), "")
 
 

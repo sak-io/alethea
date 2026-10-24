@@ -15,7 +15,7 @@ import time
 import unittest
 from unittest import mock
 
-from engram import __version__, embedders_remote as er, recall, vectorize
+from alethea import __version__, embedders_remote as er, recall, vectorize
 from tests.daemon_helpers import ROOT, make_home, spawn, wait_up
 from tests.remote_helpers import (AWS, GHP, MODEL, PWD, SECRET_TEXT, SECRETS, RDaemon, all_files_text,
                                   jdump, remote_env, seed)
@@ -58,7 +58,7 @@ class HappyPath(AdapterBase):
         self.assertEqual(body["input"], ["alpha beta", "gamma"])
         hdr = req[1]
         self.assertIn("Authorization: Bearer %s" % KEY, hdr)
-        self.assertIn("User-Agent: engram/%s" % __version__, hdr)
+        self.assertIn("User-Agent: alethea/%s" % __version__, hdr)
         self.assertIn("Content-Type: application/json", hdr)
         self.assertNotIn("Cookie", hdr)
 
@@ -79,7 +79,7 @@ class ConsentAndConfig(AdapterBase):
         return mock.patch.multiple(http.client, HTTPConnection=mock.DEFAULT, HTTPSConnection=mock.DEFAULT)
 
     def test_remote_without_acknowledgement_makes_no_network_call(self):
-        env = {"ENGRAM_EMBEDDER_URL": "https://embeddings.example.com/v1", "ENGRAM_EMBEDDER_API_KEY": KEY}
+        env = {"ALETHEA_EMBEDDER_URL": "https://embeddings.example.com/v1", "ALETHEA_EMBEDDER_API_KEY": KEY}
         er.configure_env(env)
         with self.patched_network() as m:
             with self.assertRaises(er.RemoteError) as cm:
@@ -90,16 +90,16 @@ class ConsentAndConfig(AdapterBase):
         self.assertFalse(m["HTTPConnection"].called)
 
     def test_acknowledged_remote_without_key_is_refused_before_the_network(self):
-        er.configure_env({"ENGRAM_EMBEDDER_URL": "https://embeddings.example.com/v1",
-                          "ENGRAM_EMBEDDER_ALLOW_REMOTE": "1"})
+        er.configure_env({"ALETHEA_EMBEDDER_URL": "https://embeddings.example.com/v1",
+                          "ALETHEA_EMBEDDER_ALLOW_REMOTE": "1"})
         with self.patched_network() as m:
             with self.assertRaises(er.RemoteError):
                 er.make_openai(MODEL)
         self.assertFalse(m["HTTPSConnection"].called)
 
     def test_http_to_non_loopback_is_refused_even_when_acknowledged(self):
-        er.configure_env({"ENGRAM_EMBEDDER_URL": "http://embeddings.example.com/v1",
-                          "ENGRAM_EMBEDDER_ALLOW_REMOTE": "1", "ENGRAM_EMBEDDER_API_KEY": KEY})
+        er.configure_env({"ALETHEA_EMBEDDER_URL": "http://embeddings.example.com/v1",
+                          "ALETHEA_EMBEDDER_ALLOW_REMOTE": "1", "ALETHEA_EMBEDDER_API_KEY": KEY})
         with self.patched_network() as m:
             with self.assertRaises(er.RemoteError) as cm:
                 er.make_openai(MODEL)
@@ -111,8 +111,8 @@ class ConsentAndConfig(AdapterBase):
                     "https://x.example/v1#f", "https:///v1", "https://x.example:99999/v1",
                     "https://x.example/v 1"):
             with self.subTest(url=url):
-                er.configure_env({"ENGRAM_EMBEDDER_URL": url, "ENGRAM_EMBEDDER_ALLOW_REMOTE": "1",
-                                  "ENGRAM_EMBEDDER_API_KEY": KEY})
+                er.configure_env({"ALETHEA_EMBEDDER_URL": url, "ALETHEA_EMBEDDER_ALLOW_REMOTE": "1",
+                                  "ALETHEA_EMBEDDER_API_KEY": KEY})
                 with self.patched_network() as m, self.assertRaises(er.RemoteError):
                     er.make_openai(MODEL)
                 self.assertFalse(m["HTTPSConnection"].called)
@@ -124,7 +124,7 @@ class ConsentAndConfig(AdapterBase):
 
     def test_bad_key_formats_are_refused_without_echo(self):
         for key in ("has space", "new\nline", "tab\t", "k" * 600):
-            er.configure_env(remote_env(self.stub, ENGRAM_EMBEDDER_API_KEY=key))
+            er.configure_env(remote_env(self.stub, ALETHEA_EMBEDDER_API_KEY=key))
             with self.assertRaises(er.RemoteError) as cm:
                 er.make_openai(MODEL)
             self.assertNotIn(key.strip()[:8], cm.exception.detail)
@@ -132,21 +132,21 @@ class ConsentAndConfig(AdapterBase):
 
     def test_loopback_http_needs_no_acknowledgement_and_no_key(self):
         self.stub.key = None
-        er.configure_env({"ENGRAM_EMBEDDER_URL": self.stub.url})
+        er.configure_env({"ALETHEA_EMBEDDER_URL": self.stub.url})
         e = er.make_openai(MODEL)
         self.assertEqual(e.id, OPENAI_ID)
         self.assertNotIn("Authorization", self.stub.embedding_calls()[0][1])
 
     def test_default_endpoint_is_openai_but_needs_acknowledgement(self):
-        er.configure_env({"ENGRAM_EMBEDDER_API_KEY": KEY})
+        er.configure_env({"ALETHEA_EMBEDDER_API_KEY": KEY})
         with self.patched_network() as m, self.assertRaises(er.RemoteError) as cm:
             er.make_openai(MODEL)
         self.assertEqual(cm.exception.detail, "remote not acknowledged")
         self.assertFalse(m["HTTPSConnection"].called)
 
     def test_remote_status_never_has_key_path_or_query(self):
-        er.configure_env({"ENGRAM_EMBEDDER_URL": "https://emb.example.com:8443/secret/path/v1",
-                          "ENGRAM_EMBEDDER_API_KEY": KEY})
+        er.configure_env({"ALETHEA_EMBEDDER_URL": "https://emb.example.com:8443/secret/path/v1",
+                          "ALETHEA_EMBEDDER_API_KEY": KEY})
         s = er.remote_status("openai:" + MODEL)
         self.assertEqual(s["embedder_remote_host"], "emb.example.com:8443")
         self.assertTrue(s["embedder_remote"])
@@ -163,8 +163,8 @@ class ConsentAndConfig(AdapterBase):
             self.skipTest("openssl CLI not available")
         tls = Stub(tls=pair)
         self.addCleanup(tls.stop)
-        er.configure_env({"ENGRAM_EMBEDDER_URL": "https://localhost:%d/v1" % tls.port,
-                          "ENGRAM_EMBEDDER_API_KEY": KEY})
+        er.configure_env({"ALETHEA_EMBEDDER_URL": "https://localhost:%d/v1" % tls.port,
+                          "ALETHEA_EMBEDDER_API_KEY": KEY})
         with self.assertRaises(er.RemoteError) as cm:
             er.make_openai(MODEL)
         self.assertEqual(cm.exception.kind, "tls")
@@ -175,7 +175,7 @@ class ConsentAndConfig(AdapterBase):
         for bad in ("_create_unverified_context", "CERT_NONE", "check_hostname = False", "verify="):
             self.assertNotIn(bad, src)
         for k in os.environ:
-            self.assertFalse(k.startswith("ENGRAM_EMBEDDER_") and "VERIFY" in k.upper())
+            self.assertFalse(k.startswith("ALETHEA_EMBEDDER_") and "VERIFY" in k.upper())
 
 
 class RedactionAtTheBoundary(AdapterBase):
@@ -215,7 +215,7 @@ class RedactionAtTheBoundary(AdapterBase):
         cue = "where is password=%s used with %s" % (PWD, AWS)
         used, (v,) = recall.embed_cue(cue, relevance_floor=False)
         self.assertEqual(used, HASH_ID)
-        from engram.redact import redact
+        from alethea.redact import redact
         self.assertEqual(v, vectorize.embed(redact(cue)))
         self.assertNotEqual(v, vectorize.embed(cue))
 
@@ -317,7 +317,7 @@ class HttpHardening(AdapterBase):
 
 
 class DaemonContainment(unittest.TestCase):
-    """The real Engram + Server against the stub: consent, fallback, breaker, latency."""
+    """The real Alethea + Server against the stub: consent, fallback, breaker, latency."""
 
     def setUp(self):
         self.stub = Stub()
@@ -349,8 +349,8 @@ class DaemonContainment(unittest.TestCase):
     def test_unacknowledged_remote_falls_back_with_reason_and_sends_nothing(self):
         with mock.patch.multiple(http.client, HTTPConnection=mock.DEFAULT,
                                  HTTPSConnection=mock.DEFAULT) as m:
-            d = RDaemon({"ENGRAM_EMBEDDER": "openai:" + MODEL, "ENGRAM_EMBEDDER_API_KEY": KEY,
-                         "ENGRAM_EMBEDDER_URL": "https://embeddings.example.com/v1"})
+            d = RDaemon({"ALETHEA_EMBEDDER": "openai:" + MODEL, "ALETHEA_EMBEDDER_API_KEY": KEY,
+                         "ALETHEA_EMBEDDER_URL": "https://embeddings.example.com/v1"})
             self.addCleanup(d.cleanup)
             r = d.call("remember", {"content": "Never sent anywhere because nothing was acknowledged"})
             s = d.status()
@@ -366,7 +366,7 @@ class DaemonContainment(unittest.TestCase):
         self.assertEqual(self.stub.count(), 0)
 
     def test_wrong_and_missing_key_fall_back_and_never_echo_the_key(self):
-        for kw in ({"ENGRAM_EMBEDDER_API_KEY": "sk-wrong-KEY-0000000000000000"},):
+        for kw in ({"ALETHEA_EMBEDDER_API_KEY": "sk-wrong-KEY-0000000000000000"},):
             d = self.start(**kw)
             r = d.call("remember", {"content": "Auth fails so this row is hashed"})
             s = d.status()
@@ -377,13 +377,13 @@ class DaemonContainment(unittest.TestCase):
             self.assertNotIn("sk-wrong-KEY", jdump(s))
             self.assertNotIn(KEY, jdump(s))
             d.cleanup()
-        d = RDaemon({"ENGRAM_EMBEDDER": "openai:" + MODEL, "ENGRAM_EMBEDDER_URL": self.stub.url})
+        d = RDaemon({"ALETHEA_EMBEDDER": "openai:" + MODEL, "ALETHEA_EMBEDDER_URL": self.stub.url})
         self.addCleanup(d.cleanup)
         self.assertIn("auth", d.status()["embedder_reason"])
         self.assertNotIn("Authorization", self.stub.embedding_calls()[-1][1])
 
     def test_slow_server_falls_back_within_timeout_and_other_verbs_stay_fast(self):
-        d = self.start(ENGRAM_EMBEDDER_TIMEOUT="0.5")
+        d = self.start(ALETHEA_EMBEDDER_TIMEOUT="0.5")
         self.assertEqual(d.status()["embedder_state"], "ready")
         self.stub.delay = 4.0
         t = time.monotonic()
@@ -474,13 +474,13 @@ class SubprocessDaemon(unittest.TestCase):
         self.addCleanup(stub.stop)
         stub.key = KEY
         home = make_home()
-        env = {"ENGRAM_EMBEDDER": "openai:" + MODEL, "ENGRAM_EMBEDDER_URL": stub.url,
-               "ENGRAM_EMBEDDER_API_KEY": KEY, "ENGRAM_EMBEDDER_TIMEOUT": "1.5"}
+        env = {"ALETHEA_EMBEDDER": "openai:" + MODEL, "ALETHEA_EMBEDDER_URL": stub.url,
+               "ALETHEA_EMBEDDER_API_KEY": KEY, "ALETHEA_EMBEDDER_TIMEOUT": "1.5"}
         p = spawn(home, env)
         try:
             self.assertTrue(wait_up(home))
-            from engram import client
-            cenv = {"ENGRAM_HOME": home}
+            from alethea import client
+            cenv = {"ALETHEA_HOME": home}
             for i in range(3):
                 client.call("remember", {"content": "Subprocess memory %d on component-%d" % (i, i * 9)},
                             timeout=5, env=cenv)
@@ -490,7 +490,7 @@ class SubprocessDaemon(unittest.TestCase):
             with open("/proc/%d/cmdline" % p.pid, "rb") as f:
                 self.assertNotIn(KEY.encode(), f.read())
             cli = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "mnemo"), "status"],
-                                 env=dict(os.environ, ENGRAM_HOME=home, PYTHONDONTWRITEBYTECODE="1"),
+                                 env=dict(os.environ, ALETHEA_HOME=home, PYTHONDONTWRITEBYTECODE="1"),
                                  capture_output=True, text=True, timeout=30)
             self.assertNotIn(KEY, cli.stdout + cli.stderr)
             self.assertIn("memory text is sent to 127.0.0.1:%d for embedding" % stub.port, cli.stdout)
@@ -512,14 +512,14 @@ class SubprocessDaemon(unittest.TestCase):
 
 class ChildProcessesDoNotSeeCredentials(unittest.TestCase):
     def test_vcs_subprocesses_get_a_scrubbed_environment(self):
-        from engram import gitctx, install
+        from alethea import gitctx, install
         seen = []
 
         def fake_run(cmd, **kw):
             seen.append((cmd[0], kw.get("env")))
             return subprocess.CompletedProcess(cmd, 1, "", "")
-        creds = {"ENGRAM_EMBEDDER_API_KEY": KEY, "ENGRAM_LLM_API_KEY": "llm-" + KEY,
-                 "ENGRAM_TOKEN": "t" * 20, "PATH": os.environ.get("PATH", "")}
+        creds = {"ALETHEA_EMBEDDER_API_KEY": KEY, "ALETHEA_LLM_API_KEY": "llm-" + KEY,
+                 "ALETHEA_TOKEN": "t" * 20, "PATH": os.environ.get("PATH", "")}
         with mock.patch.dict(os.environ, creds), mock.patch("subprocess.run", fake_run):
             gitctx.cache_clear()
             gitctx._resolve(tempfile.gettempdir())
@@ -527,7 +527,7 @@ class ChildProcessesDoNotSeeCredentials(unittest.TestCase):
         self.assertEqual(len(seen), 2)
         for _c, env in seen:
             self.assertIsNotNone(env)
-            for k in ("ENGRAM_EMBEDDER_API_KEY", "ENGRAM_LLM_API_KEY", "ENGRAM_TOKEN"):
+            for k in ("ALETHEA_EMBEDDER_API_KEY", "ALETHEA_LLM_API_KEY", "ALETHEA_TOKEN"):
                 self.assertNotIn(k, env)
             self.assertIn("PATH", env)
 
@@ -537,12 +537,12 @@ class DefaultPathStaysClean(unittest.TestCase):
         home = make_home()
         code = (
             "import sys, threading\nsys.path.insert(0, sys.argv[2])\n"
-            "from engram.daemon import Engram\n"
-            "e = Engram(home=sys.argv[1], env={'ENGRAM_HOME': sys.argv[1]})\n"
+            "from alethea.daemon import Alethea\n"
+            "e = Alethea(home=sys.argv[1], env={'ALETHEA_HOME': sys.argv[1]})\n"
             "e.handle('remember', {'content': 'default path memory about the ledger'})\n"
             "e.handle('status', {})\n"
             "e.handle('reembed', {'action': 'plan'})\n"
-            "bad = [m for m in ('engram.embedders_remote', 'engram.embedders_ext', 'ssl', 'fastembed')"
+            "bad = [m for m in ('alethea.embedders_remote', 'alethea.embedders_ext', 'ssl', 'fastembed')"
             " if m in sys.modules]\n"
             "names = [t.name for t in threading.enumerate()]\n"
             "print(bad, [n for n in names if 'embedder' in n or 'reembed' in n])\n"

@@ -1,4 +1,4 @@
-"""`mnemo install claude-code`: wire Engram's hooks into a Claude Code settings file (stdlib only).
+"""`mnemo install claude-code`: wire Alethea's hooks into a Claude Code settings file (stdlib only).
 
 This module is the single source of truth for the hooks block (`hooks_block`); the copy-paste
 template integrations/claude-code/settings.hooks.json is generated from it and a test keeps the
@@ -7,13 +7,13 @@ two identical.
 Safety contract (all tested in tests/test_install.py):
   * merge, never replace: every other key, permission, hook and their order survive;
   * entries we own are recognised by their signature (a python interpreter command with args
-    `-I -m engram.hooks.engram_hook`, or the two legacy forms below), updated in place on
+    `-I -m alethea.hooks.alethea_hook`, or the two legacy forms below), updated in place on
     reinstall (second run: unchanged, nothing written);
   * uninstall removes only owned entries (and the containers it leaves empty);
   * invalid JSON / a non-object `hooks` is refused with the file untouched;
   * writes are atomic (temp file in the same directory, fsync, rename), keep the file mode and
     never follow a symlink at the target or at its directory;
-  * the first modification of an existing file keeps `<name>.engram-backup`.
+  * the first modification of an existing file keeps `<name>.alethea-backup`.
 Exit codes: 0 ok, 1 `--mcp` registration failed (hooks were still written), 2 user error.
 """
 import copy
@@ -27,22 +27,22 @@ import stat
 import subprocess
 import sys
 
-from engram import gitctx
-from engram.export import Refused, _open_dir
+from alethea import gitctx
+from alethea.export import Refused, _open_dir
 
-HOOK_MODULE = "engram.hooks.engram_hook"
+HOOK_MODULE = "alethea.hooks.alethea_hook"
 # -I (isolated mode): `python -m` otherwise puts the CURRENT directory first on sys.path, so a
-# project containing a fake `engram/` package would run its code in every session there.
+# project containing a fake `alethea/` package would run its code in every session there.
 OWNED_ARGS = ["-I", "-m", HOOK_MODULE]
 LEGACY_ARGS = (["-m", HOOK_MODULE],)  # first installer version; still recognised as ours
-LEGACY_SCRIPT_SUFFIX = "/engram/hooks/engram_hook.py"  # T23 static block (script path)
+LEGACY_SCRIPT_SUFFIX = "/alethea/hooks/alethea_hook.py"  # T23 static block (script path)
 _PYTHON_RE = re.compile(r"^python(\d+(\.\d+)*)?(\.exe)?$")
 EVENTS = ("SessionStart", "UserPromptSubmit", "Stop", "SessionEnd", "PreCompact")
 TIMEOUT_S = 5
 SESSION_END_TIMEOUT_S = 3  # the hook has its own 2 s deadline; CC's default 1.5 s would cancel it
 SCOPES = ("user", "local", "project")
 MAX_BYTES = 4 << 20
-BACKUP_SUFFIX = ".engram-backup"
+BACKUP_SUFFIX = ".alethea-backup"
 MCP_TIMEOUT_S = 10
 
 EXIT_OK, EXIT_PARTIAL, EXIT_USER = 0, 1, 2
@@ -66,7 +66,7 @@ def hook_group(event, python=None):
 
 
 def hooks_block(python=None):
-    """The complete `{"hooks": {...}}` object Engram owns (exec form, no PATH dependence)."""
+    """The complete `{"hooks": {...}}` object Alethea owns (exec form, no PATH dependence)."""
     return {"hooks": {e: [hook_group(e, python)] for e in EVENTS}}
 
 
@@ -76,7 +76,7 @@ def template_text(python="/ABSOLUTE/PATH/TO/python"):
 
 def is_owned(handler):
     """Ours = a python interpreter running our hook module/script, in a known signature.
-    A handler that merely mentions engram (other command, other path, other args) is not."""
+    A handler that merely mentions alethea (other command, other path, other args) is not."""
     if not isinstance(handler, dict) or handler.get("type", "command") != "command":
         return False
     cmd, args = handler.get("command"), handler.get("args")
@@ -379,7 +379,7 @@ def apply(scope, action, dry_run=False, cwd=None, environ=None, python=None):
                 pass
             res["removed_dir"] = _rmdir_if_empty(directory, dfd)
             return res
-        # the backup protects the user's own content; an Engram-only file has none to protect
+        # the backup protects the user's own content; an Alethea-only file has none to protect
         if raw is not None and new != {} and not _exists(dfd, backup):
             _write_new(dfd, backup, raw, mode, exclusive=True)
             res["backup"] = os.path.join(directory, backup)
@@ -434,8 +434,8 @@ def status(scope, cwd=None, environ=None):
 
 
 def mcp_command(scope, python=None):
-    return ["claude", "mcp", "add", "--scope", scope, "engram", "--", python or sys.executable,
-            "-I", "-m", "engram.mcp_server"]
+    return ["claude", "mcp", "add", "--scope", scope, "alethea", "--", python or sys.executable,
+            "-I", "-m", "alethea.mcp_server"]
 
 
 def register_mcp(scope, out, err):
@@ -459,7 +459,7 @@ def register_mcp(scope, out, err):
     if p.returncode != 0:
         err("`claude mcp add` exited %d" % p.returncode)
         return 1
-    out("registered MCP server `engram` (scope %s)" % scope)
+    out("registered MCP server `alethea` (scope %s)" % scope)
     return 0
 
 
@@ -469,10 +469,10 @@ def _quote(s):
 
 
 PRIVACY = (
-    "Privacy: Engram journals your prompts and Claude's final replies for each turn (secrets "
+    "Privacy: Alethea journals your prompts and Claude's final replies for each turn (secrets "
     "matching known patterns are masked before storage; best effort, not a guarantee) and "
-    "distils memories from them. Everything stays on this machine in ~/.engram (or "
-    "$ENGRAM_HOME); no network calls, no embedding API.")
+    "distils memories from them. Everything stays on this machine in ~/.alethea (or "
+    "$ALETHEA_HOME); no network calls, no embedding API.")
 
 
 def run(args, out=None, err=None):
@@ -500,7 +500,7 @@ def _run(args, out, err):
     cmd = args.cmd
     host = getattr(args, "host", None)
     if getattr(args, "print", None) or host == "cursor" or host is None:
-        from engram import install_hosts
+        from alethea import install_hosts
         if getattr(args, "print", None):
             return install_hosts.run_print(args, out, err)
         if host == "cursor":
@@ -537,7 +537,7 @@ def _run(args, out, err):
         return 0
     if not res["changed"]:
         out("unchanged: %s (%s)" % (res["path"],
-            "Engram hooks already installed" if cmd == "install" else "no Engram hooks found"))
+            "Alethea hooks already installed" if cmd == "install" else "no Alethea hooks found"))
         rc = 0
     elif cmd == "install":
         out("%s: %s" % ("created" if res["created"] else "updated", res["path"]))
@@ -545,11 +545,11 @@ def _run(args, out, err):
         out("command: %s %s" % (sys.executable, " ".join(OWNED_ARGS)))
         rc = 0
     elif res.get("deleted"):
-        out("removed: %s (it contained only Engram's hooks)%s" % (
+        out("removed: %s (it contained only Alethea's hooks)%s" % (
             res["path"], "; removed the now-empty directory" if res.get("removed_dir") else ""))
         rc = 0
     else:
-        out("updated: %s (Engram hooks removed; nothing else touched)" % res["path"])
+        out("updated: %s (Alethea hooks removed; nothing else touched)" % res["path"])
         rc = 0
     if res["backup"]:
         out("backup of the previous file: %s" % res["backup"])
@@ -557,9 +557,9 @@ def _run(args, out, err):
         if getattr(args, "mcp", False):
             rc = register_mcp(scope, out, err) or rc
         out("verify: `mnemo status`, then start a Claude Code session and send a prompt")
-        out("disable: `mnemo uninstall claude-code --scope %s`, or set ENGRAM_PORT=1 to stop "
+        out("disable: `mnemo uninstall claude-code --scope %s`, or set ALETHEA_PORT=1 to stop "
             "daemon autostart" % scope)
         out(PRIVACY)
     else:
-        out("the MCP server (if registered) stays; remove it with `claude mcp remove engram`")
+        out("the MCP server (if registered) stays; remove it with `claude mcp remove alethea`")
     return rc

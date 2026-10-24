@@ -1,9 +1,9 @@
 Here is the patch for the retry bug.
 =====
-diff --git a/engram/client.py b/engram/client.py
+diff --git a/alethea/client.py b/alethea/client.py
 index 83db48c..bf2a1e0 100644
---- a/engram/client.py
-+++ b/engram/client.py
+--- a/alethea/client.py
++++ b/alethea/client.py
 @@ -10,7 +10,7 @@ def call(msg):
 -    retries = 3
 +    retries = 5

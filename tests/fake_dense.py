@@ -21,7 +21,7 @@ import hashlib
 import math
 import re
 
-from engram import vectorize
+from alethea import vectorize
 
 _RAW = re.compile(r"[A-Za-z0-9_./\\:~#@-]+")
 _CAMEL = re.compile(r"[a-z0-9][A-Z]|[A-Z]{2,}[a-z]")
@@ -110,7 +110,7 @@ def fake_vector(text, dim=384):
 
 
 class FakeDenseEmbedder(vectorize.Embedder):
-    """Registered via vectorize.register_scheme("fake", make_fake): ENGRAM_EMBEDDER=fake:<dim>."""
+    """Registered via vectorize.register_scheme("fake", make_fake): ALETHEA_EMBEDDER=fake:<dim>."""
 
     def __init__(self, dim=384):
         self.dim = int(dim)

@@ -10,9 +10,9 @@ the vetoes read the text, not the embedding, and the constant-embedder test prov
 import unittest
 from unittest import mock
 
-from engram import encode as enc
-from engram import vectorize
-from engram.cortex import Cortex
+from alethea import encode as enc
+from alethea import vectorize
+from alethea.cortex import Cortex
 from tests import fake_dense
 from tests.data.dedup_pairs import LONG_PAIRS, MERGE, PAIRS
 from tests.data.dedup_pairs_extra import LONG_PAIRS_EXTRA, SHORT_PAIRS

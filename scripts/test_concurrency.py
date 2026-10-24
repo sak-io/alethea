@@ -3,7 +3,7 @@ import threading
 import time
 import unittest
 
-from engram import consolidate
+from alethea import consolidate
 from tests.daemon_helpers import InProc
 
 
@@ -66,7 +66,7 @@ class ConcurrencyTests(unittest.TestCase):
         d = InProc(distiller=SlowDistiller())
         try:
             d.call("remember", {"content": "Recall target: the staging database is pg-stage9"})
-            cx = d.engram.cortex
+            cx = d.alethea.cortex
             for s in range(20):  # 20 episodes x 0.3 s distill = ~6 s sleep
                 for turn in range(4):
                     cx.journal_add("We decided episode %d step %d: always pin build%d in CI"

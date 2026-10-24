@@ -4,8 +4,8 @@ Hard rule: no public call ever raises or blocks past its total deadline. Any fai
 (down, hung, killed mid-reply, garbage, oversize, auth) -> {"ok": False, "offline": True}.
 
 Wire: one JSON object per line: {"verb": ..., "token": ..., **params}; one JSON line back.
-Discovery: Unix socket <home>/engram.sock, else TCP from ENGRAM_HOST/ENGRAM_PORT or
-<home>/daemon.json ({"host","port"}). Token: ENGRAM_TOKEN env, else 0600 file <home>/token.
+Discovery: Unix socket <home>/alethea.sock, else TCP from ALETHEA_HOST/ALETHEA_PORT or
+<home>/daemon.json ({"host","port"}). Token: ALETHEA_TOKEN env, else 0600 file <home>/token.
 """
 import ipaddress
 import json
@@ -41,15 +41,15 @@ def _env(env):
 
 
 def _home(env):
-    return os.path.expanduser(_env(env).get("ENGRAM_HOME") or "~/.engram")
+    return os.path.expanduser(_env(env).get("ALETHEA_HOME") or "~/.alethea")
 
 
 def _container(env):
-    return str(_env(env).get("ENGRAM_CONTAINER", "")).strip().lower() in ("1", "true", "yes", "on")
+    return str(_env(env).get("ALETHEA_CONTAINER", "")).strip().lower() in ("1", "true", "yes", "on")
 
 
 def _token(env, home):
-    tok = _env(env).get("ENGRAM_TOKEN")
+    tok = _env(env).get("ALETHEA_TOKEN")
     if tok:
         return tok
     path = os.path.join(home, "token")
@@ -58,7 +58,7 @@ def _token(env, home):
             global _warned_token
             if not _warned_token:
                 _warned_token = True
-                sys.stderr.write("engram: ignoring token file with loose permissions "
+                sys.stderr.write("alethea: ignoring token file with loose permissions "
                                  "(chmod 600 it)\n")
             return None
         with open(path, encoding="utf-8") as f:
@@ -70,7 +70,7 @@ def _token(env, home):
 def _tcp_target(env, home):
     """Return (host, port) or None."""
     e = _env(env)
-    host, port = e.get("ENGRAM_HOST"), e.get("ENGRAM_PORT")
+    host, port = e.get("ALETHEA_HOST"), e.get("ALETHEA_PORT")
     if not port:
         try:
             with open(os.path.join(home, "daemon.json"), encoding="utf-8") as f:
@@ -104,14 +104,14 @@ def _is_loopback_literal(host):
 def _token_allowed(host, env):
     if _is_loopback_literal(host):
         return True
-    return str(_env(env).get("ENGRAM_ALLOW_REMOTE_TOKEN", "")).strip().lower() in ("1", "true", "yes")
+    return str(_env(env).get("ALETHEA_ALLOW_REMOTE_TOKEN", "")).strip().lower() in ("1", "true", "yes")
 
 
 def _endpoints(env, home):
     """Ordered (kind, address) candidates."""
     out = []
     if not _container(env) and hasattr(socket, "AF_UNIX"):
-        out.append(("unix", os.path.join(home, "engram.sock")))
+        out.append(("unix", os.path.join(home, "alethea.sock")))
     t = _tcp_target(env, home)
     if t:
         out.append(("tcp", t))
@@ -156,7 +156,7 @@ def _exchange(kind, addr, payload, deadline):
 
 def _requests(verb, params, env):
     """Yield (kind, addr, payload) per endpoint. The ONLY place the token is attached: it goes
-    to the Unix socket or a loopback literal (or with ENGRAM_ALLOW_REMOTE_TOKEN), else the
+    to the Unix socket or a loopback literal (or with ALETHEA_ALLOW_REMOTE_TOKEN), else the
     endpoint is skipped. Oversize requests yield nothing."""
     home = _home(env)
     req = dict(params) if isinstance(params, dict) else {}
@@ -256,15 +256,15 @@ def _open_private(path, flags, mode):
         raise
 
 
-# Bootstrap for the detached daemon. `python -m engram.daemon` would put the CURRENT directory first
-# on sys.path, so a project containing a fake `engram/` package could run its code as a long-lived
+# Bootstrap for the detached daemon. `python -m alethea.daemon` would put the CURRENT directory first
+# on sys.path, so a project containing a fake `alethea/` package could run its code as a long-lived
 # daemon. -I drops cwd/PYTHONPATH/user site; the real package root is passed explicitly.
 _BOOTSTRAP = ("import sys; sys.path.insert(0, sys.argv[1]); del sys.argv[1:]; "
-              "from engram.daemon import main; sys.exit(main())")
+              "from alethea.daemon import main; sys.exit(main())")
 
 
 def package_root():
-    """Directory holding the `engram` package this client itself was imported from."""
+    """Directory holding the `alethea` package this client itself was imported from."""
     return os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
 
@@ -280,7 +280,7 @@ def autostart(env=None, wait=2.0, cmd=None):
     """
     lock = None
     try:
-        if not SUPPORTED or _container(env) or _env(env).get("ENGRAM_PORT"):
+        if not SUPPORTED or _container(env) or _env(env).get("ALETHEA_PORT"):
             return False
         deadline = time.monotonic() + max(0.1, float(wait))
         if ping(timeout=min(0.5, wait), env=env):
@@ -303,7 +303,7 @@ def autostart(env=None, wait=2.0, cmd=None):
                 with _open_private(stamp, os.O_TRUNC, "w") as f:
                     f.write(str(os.getpid()))
                 e = dict(_env(env))
-                e["ENGRAM_HOME"] = os.path.abspath(home)  # the daemon starts with cwd = home
+                e["ALETHEA_HOME"] = os.path.abspath(home)  # the daemon starts with cwd = home
                 pkg_parent = package_root()
                 e["PYTHONPATH"] = pkg_parent + os.pathsep + e.get("PYTHONPATH", "")
                 subprocess.Popen(cmd or daemon_command(), env=e, cwd=home,

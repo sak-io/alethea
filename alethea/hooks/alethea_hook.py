@@ -9,7 +9,7 @@ dispatches. Contract (see docs/architecture/claude-code-hooks-reference.md):
   SessionEnd       -> session_end, fire-and-forget (the daemon consolidates in the background)
   PreCompact       -> non-deep sleep, fire-and-forget
 Always exits 0 (never 2), never raises, 2 s hard deadline (watchdog), stdout is either empty
-or exactly one JSON object. stderr is silent unless ENGRAM_HOOK_DEBUG=1 (one line, no content).
+or exactly one JSON object. stderr is silent unless ALETHEA_HOOK_DEBUG=1 (one line, no content).
 """
 import json
 import os
@@ -48,8 +48,8 @@ def _finish(out=None):
     except BaseException:
         pass
     try:
-        if os.environ.get("ENGRAM_HOOK_DEBUG") == "1":
-            sys.stderr.write("engram-hook: %s %.0fms\n" % (
+        if os.environ.get("ALETHEA_HOOK_DEBUG") == "1":
+            sys.stderr.write("alethea-hook: %s %.0fms\n" % (
                 ",".join(_debug_notes) or "ok", (time.monotonic() - _T0) * 1000))
             sys.stderr.flush()
     except BaseException:
@@ -101,7 +101,7 @@ def _scope(payload):
     if cwd:
         params["cwd"] = cwd
         try:
-            from engram import gitctx
+            from alethea import gitctx
             root = gitctx.repo_root(cwd)
         except BaseException:
             root = None
@@ -114,19 +114,19 @@ def _scope(payload):
 
 
 def _send_only(verb, params):
-    from engram import client
+    from alethea import client
     return client.send_nowait(verb, params, timeout=SEND_TIMEOUT_S)
 
 
 def _call(verb, params, timeout):
-    from engram import client
+    from alethea import client
     return client.call(verb, params, timeout=timeout)
 
 
 def _spawn_autostart():
     """Start the daemon in the background so later events work; never waits for it."""
     try:
-        code = ("import sys; sys.path.insert(0, %r); from engram import client; "
+        code = ("import sys; sys.path.insert(0, %r); from alethea import client; "
                 "client.autostart()" % _ROOT)
         subprocess.Popen([sys.executable, "-I", "-c", code], stdin=subprocess.DEVNULL,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -145,7 +145,7 @@ def on_session_start(payload):
     text = r.get("text") if r.get("ok") else None
     if not isinstance(text, str) or not text.strip():
         return None
-    from engram import render  # memory is data: neutralise it before it reaches the model
+    from alethea import render  # memory is data: neutralise it before it reaches the model
     ctx = render.render_list(text.splitlines(), BRIEFING_LINE_CHARS, BRIEFING_CAP)
     if not ctx:
         return None
@@ -175,15 +175,15 @@ def on_stop(payload):
 
 def _spawn_export(params):
     """Refresh already-exported rule files in a detached child (the hook stays fast). Only
-    when the repo already has an Engram-owned export file: nothing is ever created here."""
+    when the repo already has an Alethea-owned export file: nothing is ever created here."""
     try:
         root = params.get("repo_root")
         if not root:
             return
-        from engram import export
+        from alethea import export
         if not any(export._exists(root, t) for t in export.TARGETS):
             return
-        subprocess.Popen([sys.executable, "-m", "engram.export", params.get("cwd") or root],
+        subprocess.Popen([sys.executable, "-m", "alethea.export", params.get("cwd") or root],
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True,
                          cwd=_ROOT, env=dict(os.environ, PYTHONPATH=_ROOT,

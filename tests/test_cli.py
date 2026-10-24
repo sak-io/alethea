@@ -13,8 +13,8 @@ MNEMO = os.path.join(ROOT, "scripts", "mnemo")
 
 
 def run(home, *args, stdin=None, cwd=None, exe=MNEMO, extra_env=None):
-    env = dict(os.environ, ENGRAM_HOME=home, PYTHONDONTWRITEBYTECODE="1")
-    for k in ("ENGRAM_PORT", "ENGRAM_HOST", "ENGRAM_TOKEN", "PYTHONPATH"):
+    env = dict(os.environ, ALETHEA_HOME=home, PYTHONDONTWRITEBYTECODE="1")
+    for k in ("ALETHEA_PORT", "ALETHEA_HOST", "ALETHEA_TOKEN", "PYTHONPATH"):
         env.pop(k, None)
     env.update(extra_env or {})
     return subprocess.run([sys.executable, exe] + list(args), input=stdin, env=env,
@@ -106,7 +106,7 @@ class RoundTrip(WithDaemon):
         for args in (["status"], ["--json", "status"], ["forget", "nope"],
                      ["--json", "forget", "nope"], ["remember", "x" * 100000],
                      ["--strict", "up"], ["bogus"]):
-            r = run(self.home, *args, extra_env={"ENGRAM_TOKEN": tok})
+            r = run(self.home, *args, extra_env={"ALETHEA_TOKEN": tok})
             self.assertNotIn(tok, r.stdout + r.stderr, args)
 
     def test_oversize_remember_clear_message(self):
@@ -120,7 +120,7 @@ class RoundTrip(WithDaemon):
         import threading
         home = make_home()
         srv = socket.socket(socket.AF_UNIX)
-        srv.bind(os.path.join(home, "engram.sock"))
+        srv.bind(os.path.join(home, "alethea.sock"))
         srv.listen(8)
 
         def loop():
@@ -145,7 +145,7 @@ class RoundTrip(WithDaemon):
     def test_epipe_with_head(self):
         for i in range(30):  # seeded in-process: 30 mnemo subprocesses cost ~4 s
             self.d.call("remember", {"content": "Penguin fact number %d about glaciers" % i})
-        env = dict(os.environ, ENGRAM_HOME=self.home, PYTHONDONTWRITEBYTECODE="1")
+        env = dict(os.environ, ALETHEA_HOME=self.home, PYTHONDONTWRITEBYTECODE="1")
         r = subprocess.run("%s %s dump | head -1" % (sys.executable, MNEMO), shell=True,
                            env=env, capture_output=True, text=True, cwd="/tmp")
         self.assertEqual(len(r.stdout.splitlines()), 1)
@@ -153,7 +153,7 @@ class RoundTrip(WithDaemon):
         self.assertNotIn("BrokenPipe", r.stderr)
 
     def test_keyboard_interrupt_exit_130(self):
-        code = ("import sys\nfrom engram import cli\n"
+        code = ("import sys\nfrom alethea import cli\n"
                 "def boom(a): raise KeyboardInterrupt\n"
                 "cli.COMMANDS['status']=boom\nsys.exit(cli.main(['status']))")
         env = dict(os.environ, PYTHONPATH=ROOT, PYTHONDONTWRITEBYTECODE="1")
@@ -181,7 +181,7 @@ class Offline(unittest.TestCase):
             self.assertEqual(r.returncode, 3, args)
 
     def test_up_failing_strict(self):
-        env = {"ENGRAM_PORT": "1"}
+        env = {"ALETHEA_PORT": "1"}
         self.assertEqual(run(self.home, "up", "--timeout", "0.3", extra_env=env).returncode, 0)
         r = run(self.home, "--strict", "up", "--timeout", "0.3", extra_env=env)
         self.assertEqual(r.returncode, 3)
@@ -190,13 +190,13 @@ class Offline(unittest.TestCase):
         import socket
         import time
         srv = socket.socket(socket.AF_UNIX)
-        srv.bind(os.path.join(self.home, "engram.sock"))
+        srv.bind(os.path.join(self.home, "alethea.sock"))
         srv.listen(8)
         try:
             # same code path as the real 10 s TIMEOUT_CLI, shrunk to 1 s to keep the suite fast
-            code = ("import sys\nfrom engram import client, cli\nclient.TIMEOUT_CLI = 1.0\n"
+            code = ("import sys\nfrom alethea import client, cli\nclient.TIMEOUT_CLI = 1.0\n"
                     "sys.exit(cli.main(['status']))")
-            env = dict(os.environ, ENGRAM_HOME=self.home, PYTHONPATH=ROOT,
+            env = dict(os.environ, ALETHEA_HOME=self.home, PYTHONPATH=ROOT,
                        PYTHONDONTWRITEBYTECODE="1")
             t = time.time()
             r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True,
@@ -230,21 +230,21 @@ class Usage(unittest.TestCase):
     def test_unknown_subcommand_and_bad_args(self):
         for args in (["bogus"], [], ["recall"], ["recall", "x", "-k", "0"],
                      ["remember", "x", "--salience", "7"], ["remember", "x", "--kind", "nope"]):
-            r = run("/nonexistent-engram-home", *args)
+            r = run("/nonexistent-alethea-home", *args)
             self.assertEqual(r.returncode, 2, args)
             self.assertNotIn("Traceback", r.stderr)
             self.assertEqual(r.stdout, "")
 
     def test_help_documents_exit_codes(self):
-        r = run("/nonexistent-engram-home", "--help")
+        r = run("/nonexistent-alethea-home", "--help")
         self.assertEqual(r.returncode, 0)
         self.assertIn("exit codes", r.stdout)
 
     def test_reembed_offline_is_fail_soft(self):
-        r = run("/nonexistent-engram-home", "reembed", "--dry-run")
+        r = run("/nonexistent-alethea-home", "reembed", "--dry-run")
         self.assertEqual(r.returncode, 0)
         self.assertNotIn("Traceback", r.stderr)
-        self.assertEqual(run("/nonexistent-engram-home", "--strict", "reembed").returncode, 3)
+        self.assertEqual(run("/nonexistent-alethea-home", "--strict", "reembed").returncode, 3)
 
 
 class Up(unittest.TestCase):
@@ -272,8 +272,8 @@ class Up(unittest.TestCase):
         home = make_home()
         pid = None
         try:
-            env = dict(os.environ, ENGRAM_HOME=home, PYTHONDONTWRITEBYTECODE="1")
-            env.pop("ENGRAM_PORT", None)
+            env = dict(os.environ, ALETHEA_HOME=home, PYTHONDONTWRITEBYTECODE="1")
+            env.pop("ALETHEA_PORT", None)
             ps = [subprocess.Popen([sys.executable, MNEMO, "up"], env=env,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                   for _ in range(5)]
@@ -290,7 +290,7 @@ class Up(unittest.TestCase):
     def test_up_in_tcp_mode_fails_soft(self):
         home = make_home()
         try:
-            r = run(home, "up", "--timeout", "0.5", extra_env={"ENGRAM_PORT": "1"})
+            r = run(home, "up", "--timeout", "0.5", extra_env={"ALETHEA_PORT": "1"})
             self.assertEqual(r.returncode, 0)
             self.assertNotIn("Traceback", r.stderr)
         finally:

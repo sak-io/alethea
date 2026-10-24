@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from engram import cortex as c  # noqa: E402
+from alethea import cortex as c  # noqa: E402
 
 
 def days_to_archive(kind, rate, salience=0.5, limit=3650):

@@ -2,7 +2,7 @@
 import contextlib
 from unittest import mock
 
-from engram import embedders_ext, vectorize
+from alethea import embedders_ext, vectorize
 from tests import fake_dense
 
 # Name -> how to select it. The fastembed class is real; only its model call is stubbed.

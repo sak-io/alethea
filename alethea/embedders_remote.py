@@ -1,10 +1,10 @@
-"""Remote OpenAI-compatible embedder (T26, ADR 0011). Imported ONLY when ENGRAM_EMBEDDER=openai:...
+"""Remote OpenAI-compatible embedder (T26, ADR 0011). Imported ONLY when ALETHEA_EMBEDDER=openai:...
 
 PRIVACY: selecting this embedder sends memory text to a THIRD PARTY (the host in
-ENGRAM_EMBEDDER_URL). It is off by default and doubly opt-in: ENGRAM_EMBEDDER=openai:<model>
-AND, for any non-loopback host, ENGRAM_EMBEDDER_ALLOW_REMOTE=1. Everything that leaves the
+ALETHEA_EMBEDDER_URL). It is off by default and doubly opt-in: ALETHEA_EMBEDDER=openai:<model>
+AND, for any non-loopback host, ALETHEA_EMBEDDER_ALLOW_REMOTE=1. Everything that leaves the
 process is redacted HERE (`prepare`, called by `embed_many`), so no caller can bypass it. The API
-key comes only from ENGRAM_EMBEDDER_API_KEY and is used only in the Authorization header of the
+key comes only from ALETHEA_EMBEDDER_API_KEY and is used only in the Authorization header of the
 validated connection. Redirects are never followed. stdlib `http.client` only: no urllib opener,
 so no proxy handlers (HTTP(S)_PROXY is ignored), no cookie jar and no redirect handler.
 
@@ -23,8 +23,8 @@ import threading
 import time
 from urllib.parse import urlsplit
 
-from engram import __version__, vectorize
-from engram.redact import redact
+from alethea import __version__, vectorize
+from alethea.redact import redact
 
 DEFAULT_OPENAI_URL = "https://api.openai.com/v1"
 MAX_ITEM_CHARS = 8000            # per string sent (after redaction)
@@ -85,13 +85,13 @@ def parse_endpoint(url):
         port = u.port
         host = u.hostname
     except ValueError:
-        raise RemoteError("unavailable", "ENGRAM_EMBEDDER_URL is not a valid URL")
+        raise RemoteError("unavailable", "ALETHEA_EMBEDDER_URL is not a valid URL")
     if u.scheme not in ("http", "https") or not host:
-        raise RemoteError("unavailable", "ENGRAM_EMBEDDER_URL must be an http(s) URL with a host")
+        raise RemoteError("unavailable", "ALETHEA_EMBEDDER_URL must be an http(s) URL with a host")
     if u.username is not None or u.password is not None or "@" in u.netloc:
-        raise RemoteError("unavailable", "ENGRAM_EMBEDDER_URL must not contain credentials")
+        raise RemoteError("unavailable", "ALETHEA_EMBEDDER_URL must not contain credentials")
     if u.query or u.fragment or any(c.isspace() or ord(c) < 32 for c in url):
-        raise RemoteError("unavailable", "ENGRAM_EMBEDDER_URL must not contain a query, "
+        raise RemoteError("unavailable", "ALETHEA_EMBEDDER_URL must not contain a query, "
                                          "fragment or whitespace")
     if u.scheme == "http" and not _is_loopback_host(host):
         raise RemoteError("unavailable", "http:// is only allowed for loopback hosts; use https://")
@@ -110,11 +110,11 @@ def remote_status(spec):
     env = _environ()
     out = {"embedder_remote": True, "embedder_remote_host": None,
            "embedder_remote_model": None, "embedder_remote_loopback": None,
-           "embedder_remote_acknowledged": _truthy(env.get("ENGRAM_EMBEDDER_ALLOW_REMOTE"))}
+           "embedder_remote_acknowledged": _truthy(env.get("ALETHEA_EMBEDDER_ALLOW_REMOTE"))}
     try:
         model = spec.partition(":")[2].strip()
         out["embedder_remote_model"] = model if valid_model(model) else None
-        scheme, host, port, _ = parse_endpoint(env.get("ENGRAM_EMBEDDER_URL"))
+        scheme, host, port, _ = parse_endpoint(env.get("ALETHEA_EMBEDDER_URL"))
         out["embedder_remote_host"] = _display_host(scheme, host, port)
         out["embedder_remote_loopback"] = _is_loopback_host(host)
     except Exception:
@@ -208,7 +208,7 @@ class OpenAIEmbedder(vectorize.Embedder):
         body = json.dumps({"model": self.model, "input": chunk,
                            "encoding_format": "float"}).encode("utf-8")
         headers = {"Content-Type": "application/json", "Accept": "application/json",
-                   "User-Agent": "engram/%s" % __version__, "Accept-Encoding": "identity",
+                   "User-Agent": "alethea/%s" % __version__, "Accept-Encoding": "identity",
                    "Connection": "close", "Content-Length": str(len(body))}
         if self._key:
             headers["Authorization"] = "Bearer " + self._key
@@ -321,22 +321,22 @@ class OpenAIEmbedder(vectorize.Embedder):
 
 
 def make_openai(arg):
-    """Factory for ENGRAM_EMBEDDER=openai:<model>. Runs on the background loader thread.
+    """Factory for ALETHEA_EMBEDDER=openai:<model>. Runs on the background loader thread.
     Raises RemoteError('unavailable', ...) BEFORE any network I/O when consent or configuration
     is missing, so an unacknowledged remote never sees a single byte."""
     env = _environ()
     model = (arg or "").strip()
     if not valid_model(model):
         raise RemoteError("unavailable", "invalid model name")
-    scheme, host, port, base = parse_endpoint(env.get("ENGRAM_EMBEDDER_URL"))
+    scheme, host, port, base = parse_endpoint(env.get("ALETHEA_EMBEDDER_URL"))
     loopback = _is_loopback_host(host)
-    if not loopback and not _truthy(env.get("ENGRAM_EMBEDDER_ALLOW_REMOTE")):
+    if not loopback and not _truthy(env.get("ALETHEA_EMBEDDER_ALLOW_REMOTE")):
         raise RemoteError("unavailable", "remote not acknowledged")
-    key = env.get("ENGRAM_EMBEDDER_API_KEY") or ""
+    key = env.get("ALETHEA_EMBEDDER_API_KEY") or ""
     if key and not _KEY_RE.match(key):
-        raise RemoteError("unavailable", "ENGRAM_EMBEDDER_API_KEY has an invalid format")
+        raise RemoteError("unavailable", "ALETHEA_EMBEDDER_API_KEY has an invalid format")
     if not key and not loopback:
-        raise RemoteError("unavailable", "ENGRAM_EMBEDDER_API_KEY is not set")
+        raise RemoteError("unavailable", "ALETHEA_EMBEDDER_API_KEY is not set")
     emb = OpenAIEmbedder(model, scheme, host, port, base, key or None)
     emb.probe(max(vectorize.EMBED_TIMEOUT, min(vectorize.LOAD_TIMEOUT, 10.0)))
     return emb

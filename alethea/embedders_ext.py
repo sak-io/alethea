@@ -1,4 +1,4 @@
-"""Optional embedders (T25). Imported by `engram.vectorize` ONLY when ENGRAM_EMBEDDER selects one.
+"""Optional embedders (T25). Imported by `alethea.vectorize` ONLY when ALETHEA_EMBEDDER selects one.
 
 This module itself is stdlib-only; each embedder imports its third-party package inside its
 loader, so selecting `fastembed:<model>` is the only thing that ever imports fastembed (and
@@ -9,7 +9,7 @@ fallback by `vectorize.embed_batch`; nothing in this file may log or echo memory
 Thresholds are inherited from `vectorize.Embedder` (the conservative hashed values): the
 cosine distribution of a real model has not been measured here, so none is tuned (ADR 0010).
 """
-from engram import vectorize
+from alethea import vectorize
 
 DEFAULT_FASTEMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
@@ -46,5 +46,5 @@ class FastEmbedEmbedder(vectorize.Embedder):
 
 
 def make_fastembed(arg):
-    """Factory for ENGRAM_EMBEDDER=fastembed:<model>."""
+    """Factory for ALETHEA_EMBEDDER=fastembed:<model>."""
     return FastEmbedEmbedder(arg or DEFAULT_FASTEMBED_MODEL)

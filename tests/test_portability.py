@@ -6,7 +6,7 @@ import unittest
 from contextlib import redirect_stderr
 from unittest import mock
 
-from engram import cli, client, daemon, mcp_server
+from alethea import cli, client, daemon, mcp_server
 
 
 class UnsupportedPlatformTest(unittest.TestCase):
@@ -15,7 +15,7 @@ class UnsupportedPlatformTest(unittest.TestCase):
             self.assertEqual(client.call("ping"), {"ok": False, "offline": True})
             self.assertFalse(client.ping())
             with tempfile.TemporaryDirectory() as t:
-                self.assertFalse(client.autostart(env={"ENGRAM_HOME": t}, wait=0.2))
+                self.assertFalse(client.autostart(env={"ALETHEA_HOME": t}, wait=0.2))
 
     def test_cli_exits_zero_with_message_and_3_when_strict(self):
         with mock.patch.object(client, "SUPPORTED", False):
@@ -57,23 +57,23 @@ class ReservedOptionWarningTest(unittest.TestCase):
         return err.getvalue()
 
     def test_defaults_are_silent(self):
-        self.assertEqual(self.run_warn({"ENGRAM_EMBEDDER": "hash", "ENGRAM_LLM_CONSOLIDATE": False}), "")
+        self.assertEqual(self.run_warn({"ALETHEA_EMBEDDER": "hash", "ALETHEA_LLM_CONSOLIDATE": False}), "")
 
     def test_non_default_warns_once_on_one_line(self):
-        cfg = {"ENGRAM_EMBEDDER": "openai", "ENGRAM_LLM_CONSOLIDATE": True}
+        cfg = {"ALETHEA_EMBEDDER": "openai", "ALETHEA_LLM_CONSOLIDATE": True}
         out = self.run_warn(cfg)
         self.assertEqual(out.count("\n"), 1)
-        self.assertIn("ENGRAM_EMBEDDER=openai", out)
-        self.assertNotIn("ENGRAM_LLM_CONSOLIDATE", out)  # implemented by T27: no longer reserved
+        self.assertIn("ALETHEA_EMBEDDER=openai", out)
+        self.assertNotIn("ALETHEA_LLM_CONSOLIDATE", out)  # implemented by T27: no longer reserved
         self.assertEqual(self.run_warn(cfg), "")
 
-    def test_engram_constructor_warns(self):
+    def test_alethea_constructor_warns(self):
         with tempfile.TemporaryDirectory() as t:
             err = io.StringIO()
             with redirect_stderr(err):
-                e = daemon.Engram(home=t, env={"ENGRAM_HOME": t, "ENGRAM_EMBEDDER": "bert"})
+                e = daemon.Alethea(home=t, env={"ALETHEA_HOME": t, "ALETHEA_EMBEDDER": "bert"})
             e.cortex.close()
-        self.assertIn("ENGRAM_EMBEDDER=bert", err.getvalue())
+        self.assertIn("ALETHEA_EMBEDDER=bert", err.getvalue())
 
 
 if __name__ == "__main__":

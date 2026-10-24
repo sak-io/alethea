@@ -3,8 +3,8 @@ import time
 import unittest
 from pathlib import Path
 
-from engram import cortex as c
-from engram import recall, vectorize
+from alethea import cortex as c
+from alethea import recall, vectorize
 
 DAY = 86400.0
 

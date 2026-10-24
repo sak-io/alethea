@@ -7,8 +7,8 @@ import heapq
 import math
 import re
 
-from engram import vectorize
-from engram.redact import redact
+from alethea import vectorize
+from alethea.redact import redact
 
 MAX_CUE_CHARS = 2000
 # Minimum number of most-recently-touched rows the semantic (vector) channel scans (ADR 0008).
@@ -331,7 +331,7 @@ def briefing(cortex, repo_root=None, cwd=None, max_bytes=BRIEF_MAX_BYTES):
     REPO_BOOST, unscoped and other-repo stay eligible), recent episodic (<=3, same
     repo/cwd or unscoped). Active only. Returns {"text", "items"}; text <= max_bytes UTF-8.
     """
-    from engram import encode  # deferred (ADR 0002 keeps recall free of an encode import cycle)
+    from alethea import encode  # deferred (ADR 0002 keeps recall free of an encode import cycle)
     now = cortex.clock()
 
     def active(kinds):

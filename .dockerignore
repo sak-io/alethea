@@ -10,7 +10,7 @@ token
 **/token
 *.pem
 *.key
-.engram
+.alethea
 *.db
 *.db-wal
 *.db-shm

@@ -1,4 +1,4 @@
-"""Helpers for the remote-embedder and reembed tests: an in-process daemon (Engram + Server in
+"""Helpers for the remote-embedder and reembed tests: an in-process daemon (Alethea + Server in
 threads, env passed as a dict like tests.test_embedder_daemon) pointed at a tests.remote_stub.Stub."""
 import json
 import os
@@ -6,8 +6,8 @@ import shutil
 import sqlite3
 import time
 
-from engram import client, vectorize
-from engram.daemon import Engram, Server
+from alethea import client, vectorize
+from alethea.daemon import Alethea, Server
 from tests.daemon_helpers import make_home
 from tests.remote_stub import KEY, wait_for
 
@@ -22,27 +22,27 @@ SECRET_TEXT = "deploy notes: aws key %s and token %s and password=%s end" % (AWS
 
 
 def remote_env(stub, **extra):
-    env = {"ENGRAM_EMBEDDER": "openai:" + MODEL, "ENGRAM_EMBEDDER_URL": stub.url,
-           "ENGRAM_EMBEDDER_API_KEY": KEY, "ENGRAM_EMBEDDER_TIMEOUT": "0.8"}
+    env = {"ALETHEA_EMBEDDER": "openai:" + MODEL, "ALETHEA_EMBEDDER_URL": stub.url,
+           "ALETHEA_EMBEDDER_API_KEY": KEY, "ALETHEA_EMBEDDER_TIMEOUT": "0.8"}
     env.update(extra)
     return env
 
 
 class RDaemon:
     """In-process daemon. `env` entries are added to a minimal environment (never os.environ,
-    so a developer's real ENGRAM_EMBEDDER_* can not leak into a test)."""
+    so a developer's real ALETHEA_EMBEDDER_* can not leak into a test)."""
 
     def __init__(self, env=None, home=None, wait=True):
         vectorize._reset_for_tests()
         self.home = home or make_home()
-        self.env = {"ENGRAM_HOME": self.home, "PATH": os.environ.get("PATH", "")}
+        self.env = {"ALETHEA_HOME": self.home, "PATH": os.environ.get("PATH", "")}
         self.env.update(env or {})
-        self.engram = Engram(home=self.home, env=self.env)
-        self.server = Server(self.engram)
+        self.alethea = Alethea(home=self.home, env=self.env)
+        self.server = Server(self.alethea)
         assert self.server.acquire_instance()
         self.server.start()
-        self.cenv = {"ENGRAM_HOME": self.home}
-        if wait and "openai:" in self.env.get("ENGRAM_EMBEDDER", ""):
+        self.cenv = {"ALETHEA_HOME": self.home}
+        if wait and "openai:" in self.env.get("ALETHEA_EMBEDDER", ""):
             vectorize.wait_settled(10)
 
     def call(self, verb, params=None, timeout=5):
@@ -55,8 +55,8 @@ class RDaemon:
         return self.call("status")
 
     def rows(self, where=""):
-        with self.engram.lock:
-            return [dict(r) for r in self.engram.cortex.db.execute(
+        with self.alethea.lock:
+            return [dict(r) for r in self.alethea.cortex.db.execute(
                 "SELECT rowid AS rid, id, kind, content, gist, strength, embedder_id, "
                 "length(vector)/4 AS dim FROM memories %s ORDER BY rowid" % where)]
 
@@ -87,7 +87,7 @@ class RDaemon:
 
 def db_rows(home, sql="SELECT embedder_id, COUNT(*) FROM memories GROUP BY 1"):
     """Read-only look at a (possibly running) daemon's database from another process/thread."""
-    con = sqlite3.connect("file:%s?mode=ro" % os.path.join(home, "engram.db"), uri=True, timeout=5)
+    con = sqlite3.connect("file:%s?mode=ro" % os.path.join(home, "alethea.db"), uri=True, timeout=5)
     try:
         return con.execute(sql).fetchall()
     finally:

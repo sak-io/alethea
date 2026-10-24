@@ -1,6 +1,6 @@
 """End-to-end suite (T21): a REAL daemon process driven through all three front doors.
 
-Doors: engram.client (hooks/library), the MCP server over stdio pipes, and `mnemo`.
+Doors: alethea.client (hooks/library), the MCP server over stdio pipes, and `mnemo`.
 Covers remember -> recall -> observe -> sleep -> briefing -> forget, restart persistence,
 kill -9 recovery and daemon-down fail-soft. Run:
     python3 -m unittest scripts.test_e2e -v
@@ -14,7 +14,7 @@ import tempfile
 import time
 import unittest
 
-from engram import client, mcp_server
+from alethea import client, mcp_server
 from tests import netguard
 from tests.daemon_helpers import make_home, spawn, wait_up
 from tests.test_cli import run as mnemo
@@ -46,7 +46,7 @@ class Live(unittest.TestCase):
         self._net = netguard.patch()
         self.addCleanup(self._net.stop)
         self.home = make_home()
-        self.env = {"ENGRAM_HOME": self.home}
+        self.env = {"ALETHEA_HOME": self.home}
         self.proc = None
         self.addCleanup(shutil.rmtree, self.home, True)
         self.addCleanup(lambda: stop(self.proc))
@@ -238,7 +238,7 @@ class DaemonDownFailSoft(unittest.TestCase):
 
     def setUp(self):
         self.home = make_home()
-        self.env = {"ENGRAM_HOME": self.home}
+        self.env = {"ALETHEA_HOME": self.home}
         self.addCleanup(shutil.rmtree, self.home, True)
 
     def test_client(self):
@@ -256,7 +256,7 @@ class DaemonDownFailSoft(unittest.TestCase):
         m = Mcp(self.home, cwd=repo)
         m.init()
         for name, args in (("recall", {"cue": "billing"}), ("remember", {"content": FACT}),
-                           ("forget", {"id": "abc"}), ("engram_status", {})):
+                           ("forget", {"id": "abc"}), ("alethea_status", {})):
             text, err = m.tool(name, **args)
             self.assertEqual((text, err), (mcp_server.OFFLINE_TEXT, False), name)
         rc, rest, _ = m.close()

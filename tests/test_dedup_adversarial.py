@@ -1,17 +1,17 @@
 """Adversarial dedup suite (R9, R10, R11). Written before similarity code.
 
-Skipped until engram.encode.similarity exists (T07 removes the guard).
+Skipped until alethea.encode.similarity exists (T07 removes the guard).
 """
 import pathlib
 import re
 import unittest
 from unittest import mock
 
-from engram import vectorize
+from alethea import vectorize
 from tests.data.dedup_pairs import BLEND_COSINE, BLEND_JACCARD, LONG_PAIRS, MERGE, PAIRS
 
 try:
-    from engram import encode
+    from alethea import encode
 except ImportError:  # package/module not built yet
     encode = None
 
@@ -39,7 +39,7 @@ def assert_mixed_ids_not_compared(test, compare, vec_a, vec_b):
 
 
 def raw_similarity(a, b):
-    """Raw max(cosine, jaccard) from engram.vectorize, vetoes OFF (fixture check)."""
+    """Raw max(cosine, jaccard) from alethea.vectorize, vetoes OFF (fixture check)."""
     return max(vectorize.cosine(vectorize.embed(a), vectorize.embed(b)), vectorize.jaccard(a, b))
 
 
@@ -54,7 +54,7 @@ class LongFixtureTest(unittest.TestCase):
 
 class SkipGuardTest(unittest.TestCase):
     def test_suite_not_skipped_once_similarity_exists(self):
-        src = pathlib.Path(__file__).resolve().parent.parent / "engram" / "encode.py"
+        src = pathlib.Path(__file__).resolve().parent.parent / "alethea" / "encode.py"
         if src.exists() and re.search(r"^def similarity\b", src.read_text(), re.M):
             self.assertTrue(HAVE_SIM, "similarity is defined; dedup tests must run, remove the skip guard")
 
@@ -67,7 +67,7 @@ class BlendRegressionTest(unittest.TestCase):
         self.assertLess(max(BLEND_COSINE, BLEND_JACCARD), 0.88)
 
 
-@unittest.skipUnless(HAVE_SIM, "engram.encode.similarity not implemented yet (T07)")
+@unittest.skipUnless(HAVE_SIM, "alethea.encode.similarity not implemented yet (T07)")
 class DedupAdversarialTest(unittest.TestCase):
     def test_only_true_restatements_merge(self):
         for emb in EMBEDDERS:

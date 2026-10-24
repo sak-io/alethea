@@ -8,7 +8,7 @@ Two halves with a hard trust boundary:
   child of the hook). It derives every path from the caller's own git root (`gitctx`), asks
   the daemon for items, re-sanitises them, and writes the files atomically.
 
-The output flows into always-on prompts (CLAUDE.md `@.claude/engram_learned.md` import,
+The output flows into always-on prompts (CLAUDE.md `@.claude/alethea_learned.md` import,
 Cursor alwaysApply rule), so memory is DATA: every line goes through `render` (plain list
 items) under `render.RECALL_HEADER`; frontmatter and headers are fixed text, never memory.
 
@@ -22,23 +22,23 @@ import stat
 import sys
 import time
 
-from engram import gitctx, render
-from engram.redact import redact
+from alethea import gitctx, render
+from alethea.redact import redact
 
 MAX_ITEMS = 20
 MAX_BYTES = 4096          # whole generated file, headers included
 ITEM_MAX_CHARS = 300
-MARKER = "engram-auto-generated"
+MARKER = "alethea-auto-generated"
 TARGETS = {
-    "claude": (".claude", "engram_learned.md"),
-    "cursor": (".cursor/rules", "engram_learned.mdc"),
+    "claude": (".claude", "alethea_learned.md"),
+    "cursor": (".cursor/rules", "alethea_learned.mdc"),
 }
 GENERATED = "Generated at "
 FRONTMATTER = ("---\n"
-               "description: Engram learned project memory (auto-generated, do not edit)\n"
+               "description: Alethea learned project memory (auto-generated, do not edit)\n"
                "alwaysApply: true\n"
                "---\n")
-GITIGNORE_COMMENT = "# Engram generated memory export (commit only if you choose to share it)"
+GITIGNORE_COMMENT = "# Alethea generated memory export (commit only if you choose to share it)"
 FORBIDDEN_PARAMS = ("path", "paths", "target", "targets", "dir", "directory", "file", "output")
 
 STALE_TMP_S = 60.0
@@ -212,7 +212,7 @@ def write_target(root, target, items, now, create=True):
         if existing is None and not create:
             return "skipped"
         if existing is not None and not is_ours(existing, target):
-            raise Refused("%s/%s exists and lacks the Engram header; not overwriting"
+            raise Refused("%s/%s exists and lacks the Alethea header; not overwriting"
                           % (rel_dir, name))
         text = build_file(items, target, now)
         if existing is not None and stable_body(existing) == stable_body(text):
@@ -284,8 +284,8 @@ def run(cwd, targets=("claude", "cursor"), if_changed=False, env=None, now=None,
         timeout=None):
     """Export for the git root of cwd. Never raises. Returns a dict:
     {"ok", "offline"?, "error"?, "results": {target: status}, "warnings": [..], "refused": bool}
-    if_changed: only refresh existing Engram-owned targets (no new files, no .gitignore edit)."""
-    from engram import client
+    if_changed: only refresh existing Alethea-owned targets (no new files, no .gitignore edit)."""
+    from alethea import client
     res = {"ok": True, "results": {}, "warnings": [], "refused": False}
     try:
         root = gitctx.repo_root(cwd)

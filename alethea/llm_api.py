@@ -4,10 +4,10 @@ Two small stdlib-only adapters (OpenAI chat completions, Anthropic messages). Ha
 rules as any remote service (lesson: anything outside our control runs under a timeout, behind
 a circuit breaker, never under a lock):
   * https is required for every non-loopback host and a non-loopback host needs the explicit
-    ENGRAM_LLM_ALLOW_REMOTE acknowledgement; without it NO socket is ever opened;
+    ALETHEA_LLM_ALLOW_REMOTE acknowledgement; without it NO socket is ever opened;
   * default certificate verification; redirects are never followed (a 3xx is a failure, so the
     key cannot be forwarded to another host);
-  * the key comes only from ENGRAM_LLM_API_KEY, travels only in a request header, and appears in
+  * the key comes only from ALETHEA_LLM_API_KEY, travels only in a request header, and appears in
     no log, status, error text, process argument, database row or file;
   * the whole call has a hard wall-clock timeout (worker thread, abandoned on expiry), the
     response is size-capped, parsed as strict JSON (NaN/Infinity rejected) and the model's reply
@@ -155,7 +155,7 @@ class Adapter:
 
     def _headers(self):
         h = {"Content-Type": "application/json", "Accept": "application/json",
-             "User-Agent": "engram-distiller"}
+             "User-Agent": "alethea-distiller"}
         if self.provider == "anthropic":
             h["anthropic-version"] = ANTHROPIC_VERSION
             if self._key:
@@ -250,38 +250,38 @@ class Adapter:
 
 def build_adapter(cfg, env, mono=time.monotonic):
     """Validate the configuration and return an Adapter, or raise ConfigError.
-    Opens no connection. `env` supplies ENGRAM_LLM_API_KEY (and nothing else is read from it)."""
-    provider = str(cfg.get("ENGRAM_LLM_API") or "").strip().lower()
+    Opens no connection. `env` supplies ALETHEA_LLM_API_KEY (and nothing else is read from it)."""
+    provider = str(cfg.get("ALETHEA_LLM_API") or "").strip().lower()
     if provider not in PROVIDERS:
-        raise ConfigError("ENGRAM_LLM_API must be openai or anthropic")
-    model = str(cfg.get("ENGRAM_LLM_MODEL") or "").strip()
+        raise ConfigError("ALETHEA_LLM_API must be openai or anthropic")
+    model = str(cfg.get("ALETHEA_LLM_MODEL") or "").strip()
     if not model or len(model) > 200 or not model.isprintable():
-        raise ConfigError("ENGRAM_LLM_MODEL is required")
-    url = str(cfg.get("ENGRAM_LLM_URL") or "").strip() or PROVIDERS[provider]
+        raise ConfigError("ALETHEA_LLM_MODEL is required")
+    url = str(cfg.get("ALETHEA_LLM_URL") or "").strip() or PROVIDERS[provider]
     try:
         parts = urllib.parse.urlsplit(url)
         host, _port = parts.hostname, parts.port
     except ValueError:
-        raise ConfigError("ENGRAM_LLM_URL is not a valid URL")
+        raise ConfigError("ALETHEA_LLM_URL is not a valid URL")
     if parts.scheme not in ("http", "https") or not host:
-        raise ConfigError("ENGRAM_LLM_URL must be an http(s) URL")
+        raise ConfigError("ALETHEA_LLM_URL must be an http(s) URL")
     if parts.username is not None or parts.password is not None or parts.fragment:
-        raise ConfigError("ENGRAM_LLM_URL must not contain credentials or a fragment")
+        raise ConfigError("ALETHEA_LLM_URL must not contain credentials or a fragment")
     if not url.isprintable() or " " in url:
-        raise ConfigError("ENGRAM_LLM_URL is not a valid URL")
+        raise ConfigError("ALETHEA_LLM_URL is not a valid URL")
     if not is_loopback(host):
         if parts.scheme != "https":
-            raise ConfigError("a non-loopback ENGRAM_LLM_URL must use https")
-        if not cfg.get("ENGRAM_LLM_ALLOW_REMOTE"):
-            raise ConfigError("host %s is not loopback: set ENGRAM_LLM_ALLOW_REMOTE=1 to "
+            raise ConfigError("a non-loopback ALETHEA_LLM_URL must use https")
+        if not cfg.get("ALETHEA_LLM_ALLOW_REMOTE"):
+            raise ConfigError("host %s is not loopback: set ALETHEA_LLM_ALLOW_REMOTE=1 to "
                               "acknowledge that transcripts are sent there" % host)
-    key = (env.get("ENGRAM_LLM_API_KEY") or "").strip()
+    key = (env.get("ALETHEA_LLM_API_KEY") or "").strip()
     if key and (not key.isprintable() or len(key) > 512):
-        raise ConfigError("ENGRAM_LLM_API_KEY has invalid characters")
+        raise ConfigError("ALETHEA_LLM_API_KEY has invalid characters")
     if not key and not is_loopback(host):
-        raise ConfigError("ENGRAM_LLM_API_KEY is required for a remote host")
+        raise ConfigError("ALETHEA_LLM_API_KEY is required for a remote host")
     try:
-        timeout = float(cfg.get("ENGRAM_LLM_TIMEOUT", 30))
+        timeout = float(cfg.get("ALETHEA_LLM_TIMEOUT", 30))
         if not 0.05 <= timeout <= 120:
             raise ValueError
     except (TypeError, ValueError):

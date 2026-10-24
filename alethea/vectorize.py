@@ -1,7 +1,7 @@
 """Embedding, stemming, cosine/jaccard, embedder registry. Stdlib only (T§4).
 
-Optional embedders (T25) live in engram.embedders_ext and are imported only when selected by
-ENGRAM_EMBEDDER; every failure falls back to the hashed embedder (see docs/adr/0010).
+Optional embedders (T25) live in alethea.embedders_ext and are imported only when selected by
+ALETHEA_EMBEDDER; every failure falls back to the hashed embedder (see docs/adr/0010).
 """
 import hashlib
 import importlib
@@ -15,7 +15,7 @@ from collections import OrderedDict
 from functools import lru_cache
 from array import array
 
-SALT = b"engram-v1"
+SALT = b"engram-v1"  # historical value kept on purpose (pre-rename name): changing it re-rolls every n-gram vector and the tuned thresholds
 DIM = 512
 EMBEDDER_ID = "hashed-ngram-v1:512"
 W_UNI, W_BI, W_GRAM = 1.0, 0.5, 0.12
@@ -241,7 +241,7 @@ def embed(text):
 # takes the engine lock, so the lock is never held across an embedder call.
 
 class UnknownEmbedder(ValueError):
-    """ENGRAM_EMBEDDER names no registered embedder."""
+    """ALETHEA_EMBEDDER names no registered embedder."""
 
 
 class _Bad(Exception):
@@ -252,12 +252,12 @@ class _Bad(Exception):
 
 
 # scheme -> (module, factory name), imported only when that scheme is selected.
-_LAZY = {"fastembed": ("engram.embedders_ext", "make_fastembed"),
-         "openai": ("engram.embedders_remote", "make_openai")}
+_LAZY = {"fastembed": ("alethea.embedders_ext", "make_fastembed"),
+         "openai": ("alethea.embedders_remote", "make_openai")}
 _SCHEMES = {}          # scheme -> factory(arg) -> Embedder (register_scheme(); tests, plugins)
 RETRY_S = 300.0        # library mode: after a failed load, no retry before this many seconds
-EMBED_TIMEOUT = 1.0    # daemon mode: seconds one embedding call may take (ENGRAM_EMBEDDER_TIMEOUT)
-LOAD_TIMEOUT = 120.0   # daemon mode: seconds the model load may take (ENGRAM_EMBEDDER_LOAD_TIMEOUT)
+EMBED_TIMEOUT = 1.0    # daemon mode: seconds one embedding call may take (ALETHEA_EMBEDDER_TIMEOUT)
+LOAD_TIMEOUT = 120.0   # daemon mode: seconds the model load may take (ALETHEA_EMBEDDER_LOAD_TIMEOUT)
 BREAKER_N = 3          # consecutive failures that open the breaker
 COOLDOWN_MIN = 30.0    # first cooldown; doubles per consecutive opening
 COOLDOWN_MAX = 600.0
@@ -293,7 +293,7 @@ _busy_since = None
 
 
 def register_scheme(name, factory):
-    """Register `factory(arg) -> Embedder` for ENGRAM_EMBEDDER=<name>:<arg>."""
+    """Register `factory(arg) -> Embedder` for ALETHEA_EMBEDDER=<name>:<arg>."""
     _SCHEMES[str(name).strip().lower()] = factory
 
 
@@ -326,11 +326,11 @@ def _log_once(kind, spec, exc=None, detail=None):
     if detail:
         extra = "; " + detail
     elif kind == "unavailable":
-        extra = "; install the optional package (pip install 'engram-memory[local]')"
+        extra = "; install the optional package (pip install 'alethea[local]')"
     elif kind == "unknown":
         extra = "; valid: hash, fastembed:<model>, openai:<model>"
     try:
-        sys.stderr.write("engram: embedder %s failed (%s%s); using the hashed embedder instead%s\n"
+        sys.stderr.write("alethea: embedder %s failed (%s%s); using the hashed embedder instead%s\n"
                          % (_safe_spec(spec), kind,
                             " " + type(exc).__name__ if exc is not None else "", extra))
         sys.stderr.flush()
@@ -436,7 +436,7 @@ def _start_loader():
     token = object()
     _state, _loader = "loading", token
     _load_deadline = time.monotonic() + LOAD_TIMEOUT
-    threading.Thread(target=_load_main, args=(token,), name="engram-embedder-load",
+    threading.Thread(target=_load_main, args=(token,), name="alethea-embedder-load",
                      daemon=True).start()
 
 
@@ -586,7 +586,7 @@ def _submit(job):
     import queue
     if _jobs is None:
         _jobs = queue.Queue(maxsize=1)
-        threading.Thread(target=_worker_main, args=(_jobs,), name="engram-embedder",
+        threading.Thread(target=_worker_main, args=(_jobs,), name="alethea-embedder",
                          daemon=True).start()
     if _busy_since is not None:
         return False
@@ -694,7 +694,7 @@ def _bounded(inst, todo):
             else:
                 if _busy_since is not None:
                     _replace_worker()                # a whole cooldown and still stuck
-                probe = _Job(inst, ["engram embedder probe"], probe=True)
+                probe = _Job(inst, ["alethea embedder probe"], probe=True)
                 if _submit(probe):                   # cooldown over: ONE probe, off this thread
                     _probing, _probe_job = True, probe
                     _probe_deadline = now + EMBED_TIMEOUT
@@ -822,14 +822,14 @@ def _remote_status():
     if not _spec.lower().startswith("openai:"):
         return {}
     try:
-        from engram import embedders_remote  # noqa: PLC0415
+        from alethea import embedders_remote  # noqa: PLC0415
         return embedders_remote.remote_status(_spec)
     except Exception:
         return {"embedder_remote": True, "embedder_remote_host": None}
 
 
 def status():
-    """Plain dict for `mnemo status` / `engram_status`. Never loads a model or blocks."""
+    """Plain dict for `mnemo status` / `alethea_status`. Never loads a model or blocks."""
     d = _status()
     d.update(_remote_status())
     return d

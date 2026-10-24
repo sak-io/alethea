@@ -1,10 +1,10 @@
-"""Engram daemon (R22): the only writer. NDJSON over a Unix socket.
+"""Alethea daemon (R22): the only writer. NDJSON over a Unix socket.
 
-`Engram` dispatches verbs to encode/recall/consolidate behind ONE FairLock (ADR 0005):
+`Alethea` dispatches verbs to encode/recall/consolidate behind ONE FairLock (ADR 0005):
 verbs hold it for their whole (short) duration; `sleep_cycle` takes it per batch only, so
 a long sleep cannot starve other verbs. `Server` owns transport; every transport funnels
 through `handle_request(ctx, request)` (T17 adds a TCP listener + token check there).
-Wire format: see engram/client.py. Stdlib only.
+Wire format: see alethea/client.py. Stdlib only.
 """
 import contextlib
 import errno
@@ -26,12 +26,12 @@ try:  # POSIX only
 except ImportError:
     fcntl = None
 
-from engram import (__version__, consolidate, encode, export, gitctx, recall, reembed,
+from alethea import (__version__, consolidate, encode, export, gitctx, recall, reembed,
                     vectorize)
-from engram.config import (MAX_REQUEST_BYTES, ensure_private_dir, home_dir, llm_mode,
-                           load_config)
-from engram.cortex import Cortex
-from engram.fairlock import FairLock
+from alethea.config import (MAX_REQUEST_BYTES, ensure_private_dir, home_dir, legacy_home_hint,
+                           llm_mode, load_config)
+from alethea.cortex import Cortex
+from alethea.fairlock import FairLock
 
 MAX_CONTENT_CHARS = 200_000
 MAX_CUE_CHARS = 4096
@@ -192,25 +192,25 @@ def encode_reply(resp):
             return b'{"ok":false,"error":"internal"}\n'
 
 
-class Engram:
+class Alethea:
     def __init__(self, home=None, env=None, clock=time.time, mono=time.monotonic,
                  distiller=None, cortex=None):
         self.env = os.environ if env is None else env
         self.home = ensure_private_dir(home or home_dir(self.env))
         cfg = load_config(self.env, self.home)
         warn_reserved(cfg)
-        if str(cfg["ENGRAM_EMBEDDER"]).strip().lower().startswith("openai:"):
-            from engram import embedders_remote  # only when selected (ADR 0011)
+        if str(cfg["ALETHEA_EMBEDDER"]).strip().lower().startswith("openai:"):
+            from alethea import embedders_remote  # only when selected (ADR 0011)
             embedders_remote.configure_env(self.env)
-        vectorize.configure(cfg["ENGRAM_EMBEDDER"], quiet=True, background=True,
-                            load_timeout=cfg["ENGRAM_EMBEDDER_LOAD_TIMEOUT"],
-                            embed_timeout=cfg["ENGRAM_EMBEDDER_TIMEOUT"])  # lazy: nothing optional is imported yet
-        self.sleep_interval = max(0, cfg["ENGRAM_SLEEP_INTERVAL"])
-        self.idle_sleep = max(0, cfg["ENGRAM_IDLE_SLEEP"])
+        vectorize.configure(cfg["ALETHEA_EMBEDDER"], quiet=True, background=True,
+                            load_timeout=cfg["ALETHEA_EMBEDDER_LOAD_TIMEOUT"],
+                            embed_timeout=cfg["ALETHEA_EMBEDDER_TIMEOUT"])  # lazy: nothing optional is imported yet
+        self.sleep_interval = max(0, cfg["ALETHEA_SLEEP_INTERVAL"])
+        self.idle_sleep = max(0, cfg["ALETHEA_IDLE_SLEEP"])
         self.clock, self.mono = clock, mono
         self.distiller = distiller
         self.lock = FairLock()
-        self.cortex = cortex or Cortex(self.home / "engram.db", clock=clock)
+        self.cortex = cortex or Cortex(self.home / "alethea.db", clock=clock)
         self.started = mono()
         self.last_activity = mono()
         self.last_sleep_mono = mono()
@@ -237,21 +237,21 @@ class Engram:
         mode = llm_mode(cfg)
         if mode == "off":
             return
-        from engram import distill  # lazy: not imported while the flag is off
+        from alethea import distill  # lazy: not imported while the flag is off
         adapter = None
         if mode == "api":
-            from engram import llm_api
+            from alethea import llm_api
             try:
                 adapter = llm_api.build_adapter(cfg, self.env, self.mono)
             except llm_api.ConfigError as e:
                 self.llm_error = "api mode disabled: %s" % e
-                sys.stderr.write("engram: %s\n" % self.llm_error)
+                sys.stderr.write("alethea: %s\n" % self.llm_error)
                 return
         self.llm = distill.Service(self.cortex, self.lock, cfg, mode, adapter, self.mono)
 
     def _llm_host(self):
         if self.llm is None:
-            raise BadRequest("LLM distillation is off (set ENGRAM_LLM_CONSOLIDATE=1)")
+            raise BadRequest("LLM distillation is off (set ALETHEA_LLM_CONSOLIDATE=1)")
         if self.llm.mode != "host":
             raise BadRequest("distillation runs inside the daemon (api mode)")
         return self.llm
@@ -277,7 +277,7 @@ class Engram:
         except BadRequest as e:
             return _err(str(e))
         except Exception as e:  # never leak a traceback
-            sys.stderr.write("engram: verb %s failed: %s\n" % (verb, type(e).__name__))
+            sys.stderr.write("alethea: verb %s failed: %s\n" % (verb, type(e).__name__))
             return _err("internal error")
 
     def _scope(self, p):
@@ -381,7 +381,7 @@ class Engram:
         bullets = p.get("bullets")
         if not isinstance(bullets, list):
             raise BadRequest("bullets must be a list of strings")
-        from engram import distill
+        from alethea import distill
         try:
             return svc.submit(eid, bullets)
         except distill.Invalid as e:
@@ -443,7 +443,7 @@ class Engram:
         try:
             self._run_sleep(**kw)
         except Exception as e:
-            sys.stderr.write("engram: background sleep failed: %s\n" % type(e).__name__)
+            sys.stderr.write("alethea: background sleep failed: %s\n" % type(e).__name__)
         finally:
             self._bg.discard(threading.current_thread())
 
@@ -533,7 +533,7 @@ class Engram:
                 self._run_sleep(keep_sessions=self._live_sessions(), api_ok=True)
                 return True
         except Exception as e:
-            sys.stderr.write("engram: sleep loop error: %s\n" % type(e).__name__)
+            sys.stderr.write("alethea: sleep loop error: %s\n" % type(e).__name__)
         return False
 
     def _sleep_loop(self, stop, tick=SLEEP_TICK_S):
@@ -596,7 +596,7 @@ def _authorize(ctx, request):
     return _err("auth")
 
 
-def handle_request(engram, ctx, request):
+def handle_request(alethea, ctx, request):
     """Single entry for every transport. `request` is the decoded JSON value."""
     denied = _authorize(ctx, request)
     if denied is not None:
@@ -606,22 +606,22 @@ def handle_request(engram, ctx, request):
     params = dict(request)
     params.pop("token", None)  # never reaches verbs, logs or replies
     verb = params.pop("verb", None)
-    return engram.handle(verb, params)
+    return alethea.handle(verb, params)
 
 
 class Server:
-    def __init__(self, engram, home=None, read_timeout=None, max_conns=MAX_CONNECTIONS,
+    def __init__(self, alethea, home=None, read_timeout=None, max_conns=MAX_CONNECTIONS,
                  max_request=MAX_REQUEST_BYTES, env=None, auth_clock=time.monotonic,
                  auth_limits=None):
-        self.engram = engram
-        self.env = (engram.env if engram is not None else os.environ) if env is None else env
-        self.home = ensure_private_dir(home) if home else engram.home
+        self.alethea = alethea
+        self.env = (alethea.env if alethea is not None else os.environ) if env is None else env
+        self.home = ensure_private_dir(home) if home else alethea.home
         self.limiter = AuthLimiter(auth_clock, **(auth_limits or {}))
         self.tcp_listener = None
         self.tcp_addr = None
         self.token = None
         self.fallback = False
-        self.sock_path = str(self.home / "engram.sock")
+        self.sock_path = str(self.home / "alethea.sock")
         self.read_timeout = READ_TIMEOUT_S if read_timeout is None else read_timeout
         self.max_request = max_request
         # `pending` bounds sockets (cheap; idle ones are dropped after FIRST_BYTE_S);
@@ -637,7 +637,7 @@ class Server:
     # lifecycle
 
     def _read_token(self):
-        tok = self.env.get("ENGRAM_TOKEN")
+        tok = self.env.get("ALETHEA_TOKEN")
         if tok:
             return tok
         try:
@@ -649,25 +649,25 @@ class Server:
     def _plan(self):
         """Validate TCP/container policy before touching any file."""
         e = self.env
-        container = _truthy(e.get("ENGRAM_CONTAINER"))
-        bind, port = e.get("ENGRAM_BIND") or None, e.get("ENGRAM_PORT") or None
+        container = _truthy(e.get("ALETHEA_CONTAINER"))
+        bind, port = e.get("ALETHEA_BIND") or None, e.get("ALETHEA_PORT") or None
         if port is not None:
             try:
                 port = int(port)
                 if not 0 <= port < 65536:
                     raise ValueError
             except ValueError:
-                raise StartupError("ENGRAM_PORT must be an integer in 0..65535")
+                raise StartupError("ALETHEA_PORT must be an integer in 0..65535")
         wants_tcp = container or bind is not None or port is not None
         if container and (bind is None or port is None):
-            raise StartupError("container mode needs explicit ENGRAM_BIND and ENGRAM_PORT")
+            raise StartupError("container mode needs explicit ALETHEA_BIND and ALETHEA_PORT")
         host = bind or "127.0.0.1"
         if wants_tcp:
             tok = self._read_token()
             if tok is not None and len(tok.encode("utf-8")) < MIN_TOKEN_LEN:
-                raise StartupError("ENGRAM_TOKEN must be at least %d bytes" % MIN_TOKEN_LEN)
+                raise StartupError("ALETHEA_TOKEN must be at least %d bytes" % MIN_TOKEN_LEN)
             if (container or not _is_loopback(host)) and tok is None:
-                raise StartupError("a token (ENGRAM_TOKEN, >= %d bytes) is required in "
+                raise StartupError("a token (ALETHEA_TOKEN, >= %d bytes) is required in "
                                    "container mode or on a non-loopback bind" % MIN_TOKEN_LEN)
         return container, host, (port or 0), wants_tcp
 
@@ -773,7 +773,7 @@ class Server:
                     s.close()
 
     def _ensure_token(self):
-        if self.env.get("ENGRAM_TOKEN") or (self.home / "token").exists():
+        if self.env.get("ALETHEA_TOKEN") or (self.home / "token").exists():
             return
         self._write_new_token()
 
@@ -807,7 +807,7 @@ class Server:
 
     def start(self):
         """Start accept loop + sleep loop threads (after acquire_instance() is True)."""
-        loops = [(lambda: self.engram._sleep_loop(self.stop), "sleep-loop")]
+        loops = [(lambda: self.alethea._sleep_loop(self.stop), "sleep-loop")]
         if self.listener:
             loops.insert(0, (lambda: self._accept_loop(self.listener, "unix"), "accept"))
         if self.tcp_listener:
@@ -830,10 +830,10 @@ class Server:
             if t is not threading.current_thread():
                 t.join(timeout=3)
         if self._lockf:  # only the owner cleans up files
-            for name in ("engram.sock", "daemon.json"):
+            for name in ("alethea.sock", "daemon.json"):
                 with contextlib.suppress(OSError):
                     os.unlink(str(self.home / name))
-            self.engram.close()
+            self.alethea.close()
             self._release_lock()
 
     # connections
@@ -924,7 +924,7 @@ class Server:
                     self._send(conn, _err("busy"))
                     return
                 try:
-                    resp = handle_request(self.engram, ctx, request)
+                    resp = handle_request(self.alethea, ctx, request)
                 finally:
                     self.slots.release()
                 if ctx.drop:
@@ -934,7 +934,7 @@ class Server:
                 if not self._send(conn, resp) or ctx.close:
                     return
         except Exception as e:
-            sys.stderr.write("engram: connection error: %s\n" % type(e).__name__)
+            sys.stderr.write("alethea: connection error: %s\n" % type(e).__name__)
         finally:
             with contextlib.suppress(Exception):
                 conn.close()
@@ -962,30 +962,33 @@ def warn_reserved(cfg):
         return
     bad = []
     try:
-        vectorize.parse_spec(cfg.get("ENGRAM_EMBEDDER", "hash"))
+        vectorize.parse_spec(cfg.get("ALETHEA_EMBEDDER", "hash"))
     except vectorize.UnknownEmbedder:
-        bad.append("ENGRAM_EMBEDDER=%s (unknown embedder; valid: hash, fastembed:<model>, openai:<model>)"
-                   % cfg["ENGRAM_EMBEDDER"])
+        bad.append("ALETHEA_EMBEDDER=%s (unknown embedder; valid: hash, fastembed:<model>, openai:<model>)"
+                   % cfg["ALETHEA_EMBEDDER"])
     if bad:
         _reserved_warned = True
-        sys.stderr.write("engram: reserved option(s) not implemented yet, ignored: %s\n"
+        sys.stderr.write("alethea: reserved option(s) not implemented yet, ignored: %s\n"
                          % "; ".join(bad))
 
 
 def main(argv=None):
     if not SUPPORTED:
-        sys.stderr.write("engram: %s\n" % UNSUPPORTED_MSG)
+        sys.stderr.write("alethea: %s\n" % UNSUPPORTED_MSG)
         return 2
+    hint = legacy_home_hint()
+    if hint:
+        sys.stderr.write("alethea: %s\n" % hint)
     server = Server(None, home=home_dir())
     try:
         if not server.acquire_instance():
             return 0  # another daemon won (G18)
-        server.engram = Engram(home=server.home)
+        server.alethea = Alethea(home=server.home)
     except StartupError as e:
-        sys.stderr.write("engram: refusing to start: %s\n" % e)
+        sys.stderr.write("alethea: refusing to start: %s\n" % e)
         return 2
     except Exception as e:
-        sys.stderr.write("engram: cannot start: %s\n" % e)
+        sys.stderr.write("alethea: cannot start: %s\n" % e)
         return 1
 
     def _term(signum, frame):

@@ -4,11 +4,11 @@ import os
 import re
 import unittest
 
-from engram import cli, daemon, mcp_server
+from alethea import cli, daemon, mcp_server
 from tests.daemon_helpers import ROOT
 
 API = os.path.join(ROOT, "docs", "api.md")
-DAEMON_SRC = os.path.join(ROOT, "engram", "daemon.py")
+DAEMON_SRC = os.path.join(ROOT, "alethea", "daemon.py")
 # Messages that exist in the source but are deliberately not part of the contract.
 UNDOCUMENTED_OK = {"unsupported"}  # `UNSUPPORTED` is an empty tuple: no verb can be rejected this way
 
@@ -26,7 +26,7 @@ def _section(text, start, end):
 
 class DocsApiDriftTest(unittest.TestCase):
     def test_every_daemon_verb_has_a_table_row(self):
-        verbs = sorted(n[2:] for n in dir(daemon.Engram) if n.startswith("v_"))
+        verbs = sorted(n[2:] for n in dir(daemon.Alethea) if n.startswith("v_"))
         self.assertGreaterEqual(len(verbs), 14)
         table = _section(_api(), "### Verbs", "## 2.")
         for v in verbs:
@@ -35,11 +35,11 @@ class DocsApiDriftTest(unittest.TestCase):
     def test_verb_table_has_no_stale_verbs(self):
         table = _section(_api(), "### Verbs", "Activity bookkeeping")
         documented = set(re.findall(r"^\| `([a-z_]+)` \|", table, re.M))
-        implemented = {n[2:] for n in dir(daemon.Engram) if n.startswith("v_")}
+        implemented = {n[2:] for n in dir(daemon.Alethea) if n.startswith("v_")}
         self.assertEqual(documented, implemented)
 
     def test_every_mcp_tool_is_documented(self):
-        tools = set(mcp_server.TOOLS) | {"engram_consolidate_pending", "engram_distill_submit"}
+        tools = set(mcp_server.TOOLS) | {"alethea_consolidate_pending", "alethea_distill_submit"}
         section = _section(_api(), "## 2. MCP server", "## 3.")
         for t in tools:
             self.assertIn("| `%s` |" % t, section, "MCP tool %r missing from docs/api.md" % t)

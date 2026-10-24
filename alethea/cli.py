@@ -1,4 +1,4 @@
-"""mnemo CLI: argument parsing and formatting over engram.client. No engine logic.
+"""mnemo CLI: argument parsing and formatting over alethea.client. No engine logic.
 
 Exit codes: 0 ok, and also when the daemon is offline or a command is not yet available
 (fail-soft: a one-line note goes to stderr) | 1 daemon refused the request | 2 usage error |
@@ -11,7 +11,7 @@ import os
 import sys
 import time
 
-from engram import client, gitctx
+from alethea import client, config, gitctx
 
 EXIT_OK, EXIT_ERROR, EXIT_USAGE, EXIT_OFFLINE, EXIT_NA = 0, 1, 2, 3, 4
 EPILOG = ("exit codes: 0 ok, or daemon offline / not yet available (one-line note on "
@@ -49,7 +49,7 @@ def _unit(s):
 
 
 def build_parser():
-    p = _Parser(prog="mnemo", description="Engram memory CLI.", epilog=EPILOG,
+    p = _Parser(prog="mnemo", description="Alethea memory CLI.", epilog=EPILOG,
                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--json", action="store_true", help="machine-readable JSON on stdout")
     p.add_argument("--strict", action="store_true",
@@ -89,13 +89,13 @@ def build_parser():
     s.add_argument("--status")
     s.add_argument("--limit", type=_pos_int, default=None)
     s.add_argument("--offset", type=int, default=None)
-    s = add("export-rules", "write .claude/engram_learned.md and .cursor/rules/engram_learned.mdc "
-                            "for this repository (whole files owned by Engram)")
+    s = add("export-rules", "write .claude/alethea_learned.md and .cursor/rules/alethea_learned.mdc "
+                            "for this repository (whole files owned by Alethea)")
     s.add_argument("--target", choices=["all", "claude", "cursor"], default="all")
     s.add_argument("--if-changed", action="store_true",
-                   help="only refresh existing Engram-owned files; create nothing, quiet")
+                   help="only refresh existing Alethea-owned files; create nothing, quiet")
     for name, verb in (("install", "install"), ("uninstall", "remove")):
-        s = add(name, "%s Engram for a host: claude-code (hooks) or cursor (MCP + rule); "
+        s = add(name, "%s Alethea for a host: claude-code (hooks) or cursor (MCP + rule); "
                       "`install --print mcp` prints an MCP-only snippet for other hosts" % verb)
         s.add_argument("host", nargs="?" if name == "install" else None,
                        choices=["claude-code", "cursor"])
@@ -241,6 +241,9 @@ def _fmt_reembed_line(re_):
 
 
 def cmd_status(args):
+    hint = config.legacy_home_hint()
+    if hint:
+        _err(hint)
     r = client.cli_call("status")
     if r.get("offline") and not args.json:
         _err("daemon: down (start it with `mnemo up`)")
@@ -287,7 +290,7 @@ def cmd_recall(args):
     if not p["cue"].strip():
         _err("empty cue")
         return EXIT_USAGE
-    from engram.daemon import MAX_CUE_CHARS
+    from alethea.daemon import MAX_CUE_CHARS
     if _too_large(p["cue"], MAX_CUE_CHARS):
         return EXIT_USAGE
     if args.k:
@@ -310,7 +313,7 @@ def cmd_remember(args):
     if not p["content"].strip():
         _err("empty content")
         return EXIT_USAGE
-    from engram.daemon import MAX_CONTENT_CHARS
+    from alethea.daemon import MAX_CONTENT_CHARS
     if _too_large(p["content"], MAX_CONTENT_CHARS):
         return EXIT_USAGE
     if args.kind:
@@ -346,14 +349,14 @@ def _refresh_exports():
     """After forget/sleep: refresh already-exported files (quiet, best effort). The daemon
     cannot write files, so this client-side call (and SessionEnd) is where re-export happens."""
     try:
-        from engram import export
+        from alethea import export
         export.run(os.getcwd(), if_changed=True)
     except Exception:
         pass
 
 
 def cmd_export_rules(args):
-    from engram import export
+    from alethea import export
     targets = tuple(export.TARGETS) if args.target == "all" else (args.target,)
     r = export.run(os.getcwd(), targets=targets, if_changed=args.if_changed)
     strict = _strict(args)
@@ -450,7 +453,7 @@ def cmd_reembed(args):
 
 
 def cmd_install(args):
-    from engram import install
+    from alethea import install
     return install.run(args)
 
 

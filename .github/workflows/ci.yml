@@ -37,30 +37,30 @@ jobs:
         run: |
           set -euo pipefail
           python -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/pip" install "$RUNNER_TEMP"/dist/engram_memory-*.whl
+          "$RUNNER_TEMP/venv/bin/pip" install "$RUNNER_TEMP"/dist/alethea-*.whl
           export PATH="$RUNNER_TEMP/venv/bin:$PATH"
-          export HOME="$(mktemp -d)" ENGRAM_HOME="$(mktemp -d)" ENGRAM_PORT=1
+          export HOME="$(mktemp -d)" ALETHEA_HOME="$(mktemp -d)" ALETHEA_PORT=1
           unset CLAUDE_CONFIG_DIR
           cd "$(mktemp -d)"
-          python -c "import engram; assert 'site-packages' in engram.__file__, engram.__file__"
+          python -c "import alethea; assert 'site-packages' in alethea.__file__, alethea.__file__"
           mnemo --help
           mnemo install claude-code --scope user --dry-run
           test ! -e "$HOME/.claude"
           mnemo install claude-code
           python -c "import json, os; d = json.load(open(os.path.expanduser('~/.claude/settings.json'))); assert set(d['hooks']) == {'SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd', 'PreCompact'}, d"
-          out="$(engram-hook < /dev/null)"
+          out="$(alethea-hook < /dev/null)"
           test -z "$out"
           mnemo install claude-code
           mnemo uninstall claude-code
           # uninstall deletes a settings file it created (and its empty directory); a pre-existing
-          # file stays and must no longer contain Engram's hooks
+          # file stays and must no longer contain Alethea's hooks
           python -c "import json, os; p = os.path.expanduser('~/.claude/settings.json'); assert (not os.path.exists(p)) or 'hooks' not in json.load(open(p)), p"
           # Cursor: MCP registration only (no hooks), same lifecycle; and the MCP-only snippet
           mnemo install cursor --dry-run
           test ! -e "$HOME/.cursor"
           mnemo install cursor
-          python -c "import json, os; d = json.load(open(os.path.expanduser('~/.cursor/mcp.json'))); assert d['mcpServers']['engram']['args'] == ['-I', '-m', 'engram.mcp_server'], d"
+          python -c "import json, os; d = json.load(open(os.path.expanduser('~/.cursor/mcp.json'))); assert d['mcpServers']['alethea']['args'] == ['-I', '-m', 'alethea.mcp_server'], d"
           mnemo install cursor
           mnemo uninstall cursor
           test ! -e "$HOME/.cursor"
-          mnemo install --print mcp | python -c "import json, sys; assert 'engram' in json.load(sys.stdin)['mcpServers']"
+          mnemo install --print mcp | python -c "import json, sys; assert 'alethea' in json.load(sys.stdin)['mcpServers']"

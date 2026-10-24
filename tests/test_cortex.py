@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from engram.config import SCHEMA_VERSION
-from engram.cortex import Cortex, KINDS, DECAY, SchemaVersionError
+from alethea.config import SCHEMA_VERSION
+from alethea.cortex import Cortex, KINDS, DECAY, SchemaVersionError
 
 
 class Clock:
@@ -127,7 +127,7 @@ class FtsTest(unittest.TestCase):
 
 class DegradeTest(unittest.TestCase):
     def test_fts_missing_degrades(self):
-        import engram.cortex as cx
+        import alethea.cortex as cx
         orig = cx._FTS
         cx._FTS = "CREATE VIRTUAL TABLE t USING nosuchmodule(x);"
         try:
@@ -144,7 +144,7 @@ class DegradeTest(unittest.TestCase):
 class FileTest(unittest.TestCase):
     def test_wal_and_private_dir_and_persistence(self):
         with tempfile.TemporaryDirectory() as d:
-            p = Path(d) / "home" / "engram.db"
+            p = Path(d) / "home" / "alethea.db"
             c = Cortex(p)
             self.assertEqual(c.db.execute("PRAGMA journal_mode").fetchone()[0], "wal")
             self.assertEqual(stat.S_IMODE(os.stat(p.parent).st_mode), 0o700)
@@ -169,7 +169,7 @@ if __name__ == "__main__":
 class SchemaVersionTest(unittest.TestCase):
     def test_newer_schema_is_refused_and_older_or_equal_opens(self):
         with tempfile.TemporaryDirectory() as t:
-            path = os.path.join(t, "engram.db")
+            path = os.path.join(t, "alethea.db")
             c = Cortex(path)
             c.meta_set("schema_version", str(SCHEMA_VERSION + 1))
             c.db.commit()
@@ -179,7 +179,7 @@ class SchemaVersionTest(unittest.TestCase):
             self.assertIn("newer", str(cm.exception))
 
             db = sqlite3.connect(path)
-            db.execute("UPDATE engram_meta SET value=? WHERE key='schema_version'", (str(SCHEMA_VERSION),))
+            db.execute("UPDATE alethea_meta SET value=? WHERE key='schema_version'", (str(SCHEMA_VERSION),))
             db.commit()
             db.close()
             Cortex(path).close()

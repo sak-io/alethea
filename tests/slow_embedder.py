@@ -2,7 +2,7 @@
 import threading
 import time
 
-from engram import vectorize
+from alethea import vectorize
 from tests import fake_dense
 
 
@@ -56,7 +56,7 @@ class ControlledEmbedder(vectorize.Embedder):
 
 
 def register(ctl):
-    """Register scheme `slow` (ENGRAM_EMBEDDER=slow:x) bound to `ctl`."""
+    """Register scheme `slow` (ALETHEA_EMBEDDER=slow:x) bound to `ctl`."""
     def factory(arg):
         if ctl.load_delay:
             time.sleep(ctl.load_delay)

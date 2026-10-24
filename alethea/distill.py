@@ -1,4 +1,4 @@
-"""LLM-assisted consolidation (T27, ADR 0012). Imported only when ENGRAM_LLM_CONSOLIDATE is on.
+"""LLM-assisted consolidation (T27, ADR 0012). Imported only when ALETHEA_LLM_CONSOLIDATE is on.
 
 Episode text is attacker-influenced and whatever a model returns is UNTRUSTED. The design
 rules that follow from that, enforced here:
@@ -13,7 +13,7 @@ rules that follow from that, enforced here:
   * an episode is marked consolidated only after a bullet was accepted or the host sent an
     explicit empty list; otherwise it stays pending and falls back to the extractive path
     when its TTL runs out.
-State is kept in engram_meta (no schema change): `llm_pending:<first journal id>` (queued
+State is kept in alethea_meta (no schema change): `llm_pending:<first journal id>` (queued
 episode with expiry, listed flag, attempts) and `llm_done:<id>` (the result, for idempotent
 re-submission). Both are removed with the journal rows (consolidate.purge_journal).
 """
@@ -22,8 +22,8 @@ import re
 import time
 from collections import deque
 
-from engram import consolidate, encode, render
-from engram.redact import redact
+from alethea import consolidate, encode, render
+from alethea.redact import redact
 
 PENDING = "llm_pending:"
 DONE = "llm_done:"
@@ -62,9 +62,9 @@ class Service:
         self.cortex, self.lock, self.mode, self.adapter = cortex, lock, mode, adapter
         self.mono = mono
         self.clock = cortex.clock
-        self.ttl = max(60.0, float(cfg.get("ENGRAM_LLM_PENDING_TTL") or 3 * 86400))
-        self.budget = max(1, int(cfg.get("ENGRAM_LLM_BUDGET") or 5))
-        self.daily_cap = max(1, int(cfg.get("ENGRAM_LLM_DAILY_CAP") or 50))
+        self.ttl = max(60.0, float(cfg.get("ALETHEA_LLM_PENDING_TTL") or 3 * 86400))
+        self.budget = max(1, int(cfg.get("ALETHEA_LLM_BUDGET") or 5))
+        self.daily_cap = max(1, int(cfg.get("ALETHEA_LLM_DAILY_CAP") or 50))
         self._sess_rate = {}
         self._global_rate = deque()
 
@@ -78,13 +78,13 @@ class Service:
 
     def _del(self, *keys):
         for k in keys:
-            self.cortex.db.execute("DELETE FROM engram_meta WHERE key=?", (k,))
+            self.cortex.db.execute("DELETE FROM alethea_meta WHERE key=?", (k,))
         self.cortex.db.commit()
 
     def _all_pending(self):
         """[(eid, rec)] oldest first (queued_at, then id)."""
         rows = self.cortex.db.execute(
-            "SELECT key, value FROM engram_meta WHERE key >= ? AND key < ?",
+            "SELECT key, value FROM alethea_meta WHERE key >= ? AND key < ?",
             (PENDING, PENDING[:-1] + ";")).fetchall()
         out = []
         for r in rows:

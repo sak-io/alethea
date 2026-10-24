@@ -8,14 +8,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import engram
-from engram import config
+import alethea
+from alethea import config
 from tests import netguard
 
 
 class SkeletonTest(unittest.TestCase):
     def test_package_importable_with_version(self):
-        self.assertTrue(engram.__version__)
+        self.assertTrue(alethea.__version__)
 
     def test_no_third_party_modules_loaded(self):
         third = [m for m in sys.modules if m.split(".")[0] in ("numpy", "requests", "fastembed")]
@@ -45,14 +45,14 @@ class SkeletonTest(unittest.TestCase):
 
     def test_config_precedence_env_over_file_over_default(self):
         with tempfile.TemporaryDirectory() as t:
-            self.assertEqual(config.load_config({}, t)["ENGRAM_IDLE_SLEEP"], 180)
-            Path(t, "config.json").write_text(json.dumps({"ENGRAM_IDLE_SLEEP": 5, "bogus": 1}))
+            self.assertEqual(config.load_config({}, t)["ALETHEA_IDLE_SLEEP"], 180)
+            Path(t, "config.json").write_text(json.dumps({"ALETHEA_IDLE_SLEEP": 5, "bogus": 1}))
             cfg = config.load_config({}, t)
-            self.assertEqual(cfg["ENGRAM_IDLE_SLEEP"], 5)
+            self.assertEqual(cfg["ALETHEA_IDLE_SLEEP"], 5)
             self.assertNotIn("bogus", cfg)
-            cfg = config.load_config({"ENGRAM_IDLE_SLEEP": "7", "ENGRAM_LLM_CONSOLIDATE": "1"}, t)
-            self.assertEqual(cfg["ENGRAM_IDLE_SLEEP"], 7)
-            self.assertIs(cfg["ENGRAM_LLM_CONSOLIDATE"], True)
+            cfg = config.load_config({"ALETHEA_IDLE_SLEEP": "7", "ALETHEA_LLM_CONSOLIDATE": "1"}, t)
+            self.assertEqual(cfg["ALETHEA_IDLE_SLEEP"], 7)
+            self.assertIs(cfg["ALETHEA_LLM_CONSOLIDATE"], True)
 
     def test_corrupt_config_file_falls_back_to_defaults(self):
         with tempfile.TemporaryDirectory() as t:
@@ -60,7 +60,7 @@ class SkeletonTest(unittest.TestCase):
             self.assertEqual(config.load_config({}, t), config.DEFAULTS)
 
     def test_home_dir_honours_env(self):
-        self.assertEqual(config.home_dir({"ENGRAM_HOME": "/x/y"}), Path("/x/y"))
+        self.assertEqual(config.home_dir({"ALETHEA_HOME": "/x/y"}), Path("/x/y"))
 
     def test_sqlite_fts5_available(self):
         db = sqlite3.connect(":memory:")

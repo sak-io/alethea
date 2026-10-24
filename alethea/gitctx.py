@@ -14,11 +14,11 @@ _lock = threading.Lock()
 _clock = time.monotonic
 
 
-SECRET_ENV = ("ENGRAM_EMBEDDER_API_KEY", "ENGRAM_LLM_API_KEY", "ENGRAM_TOKEN")
+SECRET_ENV = ("ALETHEA_EMBEDDER_API_KEY", "ALETHEA_LLM_API_KEY", "ALETHEA_TOKEN")
 
 
 def scrubbed_env(env=None):
-    """Copy of the environment without Engram's credentials, for child processes (git) that
+    """Copy of the environment without Alethea's credentials, for child processes (git) that
     have no use for them: a repo-controlled git hook or config must not see the API key."""
     e = dict(os.environ if env is None else env)
     for k in SECRET_ENV:

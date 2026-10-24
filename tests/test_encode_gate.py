@@ -2,9 +2,9 @@
 import unittest
 from unittest import mock
 
-from engram import encode as enc
-from engram import vectorize
-from engram.cortex import Cortex
+from alethea import encode as enc
+from alethea import vectorize
+from alethea.cortex import Cortex
 from tests.data.dedup_pairs import MERGE, PAIRS
 from tests.data.secrets import POSITIVE
 
@@ -116,7 +116,7 @@ class GateTests(unittest.TestCase):
         self.assertNotEqual(a["id"], r["id"])
 
     def test_recall_candidates_imported_lazily(self):
-        with mock.patch("engram.recall.candidates", return_value=[]) as c:
+        with mock.patch("alethea.recall.candidates", return_value=[]) as c:
             enc.encode(self.cx, STRONG)
         c.assert_called_once()
         self.assertNotIn("recall", vars(enc))
@@ -223,7 +223,7 @@ class GateTests(unittest.TestCase):
         self.assertIsNotNone(r["journal_id"])
 
     def test_cap_configurable_by_env(self):
-        with mock.patch.dict("os.environ", {"ENGRAM_MAX_TURN_BYTES": "2048"}):
+        with mock.patch.dict("os.environ", {"ALETHEA_MAX_TURN_BYTES": "2048"}):
             enc.observe(self.cx, "word " * 2000)
         self.assertLess(len(self.cx.journal_pending()[0]["content"]), 2048 + 64)
 

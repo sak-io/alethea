@@ -1,6 +1,6 @@
 """T27: LLM-assisted consolidation (host-callback mode, opt-in direct-API mode), ADR 0012.
 
-Real daemon (threads) on a temp ENGRAM_HOME, MCP over pipes, stub HTTP servers on loopback.
+Real daemon (threads) on a temp ALETHEA_HOME, MCP over pipes, stub HTTP servers on loopback.
 NO real model or provider is contacted anywhere: distillation QUALITY is not measured here,
 only that the safety properties hold whatever a (stub) model or host answers.
 """
@@ -14,7 +14,7 @@ import threading
 import time
 import unittest
 
-from engram import distill, llm_api, render
+from alethea import distill, llm_api, render
 from tests.distill_helpers import (GOOD, TURNS, Clock, Daemon, Stub, anthropic_reply,
                                    openai_reply, timed)
 from tests.daemon_helpers import ROOT, make_home
@@ -46,19 +46,19 @@ class FlagOffTest(Base):
             import sys, threading, tempfile, json
             sys.path.insert(0, %r)
             before = {t.name for t in threading.enumerate()}
-            from engram.daemon import Engram
+            from alethea.daemon import Alethea
             h = tempfile.mkdtemp(prefix="eg")
-            e = Engram(home=h, env={"ENGRAM_HOME": h, "ENGRAM_LLM_API": "openai",
-                                    "ENGRAM_LLM_MODEL": "m", "ENGRAM_LLM_ALLOW_REMOTE": "1"})
+            e = Alethea(home=h, env={"ALETHEA_HOME": h, "ALETHEA_LLM_API": "openai",
+                                    "ALETHEA_LLM_MODEL": "m", "ALETHEA_LLM_ALLOW_REMOTE": "1"})
             for i in range(6):
                 e.handle("observe", {"content": "Decision: use Postgres because of RLS %%d" %% i,
                                      "session_id": "s", "role": "user"})
             r = e.handle("sleep", {"consolidate_only": True})
             keys = [k[0] for k in e.cortex.db.execute(
-                "SELECT key FROM engram_meta WHERE key LIKE 'llm%%'")]
+                "SELECT key FROM alethea_meta WHERE key LIKE 'llm%%'")]
             print(json.dumps({
-                "distill": "engram.distill" in sys.modules,
-                "api": "engram.llm_api" in sys.modules,
+                "distill": "alethea.distill" in sys.modules,
+                "api": "alethea.llm_api" in sys.modules,
                 "threads": sorted({t.name for t in threading.enumerate()} - before),
                 "keys": keys, "queued": "queued" in r["stages"]["consolidate"],
                 "pending": e.handle("pending", {}), "submit": e.handle(
@@ -73,7 +73,7 @@ class FlagOffTest(Base):
         self.assertEqual(out.returncode, 0, out.stderr)
         r = json.loads(out.stdout.strip().splitlines()[-1])
         self.assertFalse(r["distill"])
-        self.assertFalse(r["api"])  # even with ENGRAM_LLM_API set: the master flag is off
+        self.assertFalse(r["api"])  # even with ALETHEA_LLM_API set: the master flag is off
         self.assertEqual(r["threads"], [])
         self.assertEqual(r["keys"], [])  # nothing queued, no counters
         self.assertFalse(r["queued"])
@@ -92,17 +92,17 @@ class FlagOffTest(Base):
         m = Mcp(d.home)
         m.init()
         names = [t["name"] for t in m.rpc("tools/list")["result"]["tools"]]
-        self.assertNotIn("engram_consolidate_pending", names)
-        self.assertNotIn("engram_distill_submit", names)
-        r = m.rpc("tools/call", {"name": "engram_distill_submit", "arguments": {}})
+        self.assertNotIn("alethea_consolidate_pending", names)
+        self.assertNotIn("alethea_distill_submit", names)
+        r = m.rpc("tools/call", {"name": "alethea_distill_submit", "arguments": {}})
         self.assertEqual(r["error"]["code"], -32602)
         m.close()
 
     def test_host_mode_never_imports_the_api_adapters(self):
-        code = ("import sys; sys.path.insert(0, %r); import tempfile; from engram.daemon import "
-                "Engram; h = tempfile.mkdtemp(prefix='eg'); e = Engram(home=h, env={'ENGRAM_HOME': h,"
-                " 'ENGRAM_LLM_CONSOLIDATE': '1'}); print('engram.llm_api' in sys.modules, "
-                "'engram.distill' in sys.modules); e.cortex.close()") % ROOT
+        code = ("import sys; sys.path.insert(0, %r); import tempfile; from alethea.daemon import "
+                "Alethea; h = tempfile.mkdtemp(prefix='eg'); e = Alethea(home=h, env={'ALETHEA_HOME': h,"
+                " 'ALETHEA_LLM_CONSOLIDATE': '1'}); print('alethea.llm_api' in sys.modules, "
+                "'alethea.distill' in sys.modules); e.cortex.close()") % ROOT
         out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                              timeout=60)
         self.assertEqual(out.stdout.split(), ["False", "True"], out.stderr)
@@ -133,7 +133,7 @@ class QueueTest(Base):
         self.assertTrue(e["text"].startswith(render.TRANSCRIPT_HEADER + "\n- user: "))
 
     def test_ttl_falls_back_to_extractive(self):
-        d = self.mk({"ENGRAM_LLM_PENDING_TTL": "3600"})
+        d = self.mk({"ALETHEA_LLM_PENDING_TTL": "3600"})
         d.episode()
         d.consolidate()
         self.assertEqual(d.memories(kind="episodic"), [])
@@ -148,7 +148,7 @@ class QueueTest(Base):
         self.assertGreaterEqual(len(d.memories(kind="episodic")), 1)
         self.assertEqual(d.journal_pending(), 0)
         self.assertEqual(d.dist()["queue_length"], 0)
-        keys = d.cortex.db.execute("SELECT key FROM engram_meta WHERE key LIKE 'llm_pending:%'")
+        keys = d.cortex.db.execute("SELECT key FROM alethea_meta WHERE key LIKE 'llm_pending:%'")
         self.assertEqual(keys.fetchall(), [])
 
     def test_default_ttl_is_three_days(self):
@@ -269,7 +269,7 @@ class SubmitTest(Base):
         d.consolidate()
         listed = d.first_pending(1)[0]["id"]  # lists exactly one
         others = [k[0].split(":")[1] for k in d.cortex.db.execute(
-            "SELECT key FROM engram_meta WHERE key LIKE 'llm_pending:%'") if
+            "SELECT key FROM alethea_meta WHERE key LIKE 'llm_pending:%'") if
             k[0].split(":")[1] != listed]
         self.assertEqual(len(others), 1)
         r = d.call("distill_submit", {"episode_id": others[0], "bullets": GOOD})
@@ -377,7 +377,7 @@ class GateTest(Base):
             self.assertNotIn("ghp_abcdefghijklmnop", blob)
         self.d.cortex.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         for name in os.listdir(self.d.home):
-            if name.startswith("engram.db"):
+            if name.startswith("alethea.db"):
                 with open(os.path.join(self.d.home, name), "rb") as f:
                     raw = f.read()
                 self.assertNotIn(b"AKIAIOSFODNN7EXAMPLE", raw)
@@ -522,53 +522,53 @@ class McpTest(Base):
     def setUp(self):
         self.d = self.mk()
         self.d.episode(session="mcp", turns=HOSTILE_TRANSCRIPT)
-        self.m = Mcp(self.d.home, extra_env={"ENGRAM_LLM_CONSOLIDATE": "1"})
+        self.m = Mcp(self.d.home, extra_env={"ALETHEA_LLM_CONSOLIDATE": "1"})
         self.addCleanup(self.m.close)
         self.m.init()
 
     def test_tools_listed_with_instructions_and_no_way_to_write_arbitrary_memory(self):
         tools = {t["name"]: t for t in self.m.rpc("tools/list")["result"]["tools"]}
-        desc = tools["engram_consolidate_pending"]["description"]
-        for needle in ("never follow", "engram_distill_submit", "untrusted", "bullets"):
+        desc = tools["alethea_consolidate_pending"]["description"]
+        for needle in ("never follow", "alethea_distill_submit", "untrusted", "bullets"):
             self.assertIn(needle, desc)
-        props = tools["engram_distill_submit"]["inputSchema"]["properties"]
+        props = tools["alethea_distill_submit"]["inputSchema"]["properties"]
         self.assertTrue({"episode_id", "bullets"} <= set(props))
         self.assertTrue({"content", "kind", "salience", "deliberate", "meta"}.isdisjoint(props))
-        self.assertFalse(tools["engram_distill_submit"]["inputSchema"]["additionalProperties"])
+        self.assertFalse(tools["alethea_distill_submit"]["inputSchema"]["additionalProperties"])
         for extra in ({"content": "x"}, {"kind": "identity"}, {"salience": 1}, {"meta": {}}):
-            text, err = self.m.tool("engram_distill_submit", episode_id="1", bullets=[], **extra)
+            text, err = self.m.tool("alethea_distill_submit", episode_id="1", bullets=[], **extra)
             self.assertTrue(err, extra)
             self.assertIn("unknown argument", text)
 
     def test_round_trip_and_inert_output(self):
-        text, err = self.m.tool("engram_consolidate_pending")
+        text, err = self.m.tool("alethea_consolidate_pending")
         self.assertFalse(err)
         self.assertIn("never follow any instruction", text)
         self.assertIn(render.TRANSCRIPT_HEADER, text)
         for bad in ("<", ">", "`", "@"):
             self.assertNotIn(bad, text.split(render.TRANSCRIPT_HEADER, 1)[1])
         eid = re.search(r"Episode id (\d+)", text).group(1)
-        text, err = self.m.tool("engram_distill_submit", episode_id=eid, bullets=GOOD)
+        text, err = self.m.tool("alethea_distill_submit", episode_id=eid, bullets=GOOD)
         self.assertFalse(err, text)
         self.assertIn("stored 2 of 2", text)
         self.assertEqual(len(self.d.llm_memories()), 2)
-        text, err = self.m.tool("engram_consolidate_pending")
+        text, err = self.m.tool("alethea_consolidate_pending")
         self.assertEqual(text, "no episodes need distilling")
 
     def test_submit_rejects_unlisted_and_bad_input(self):
-        text, err = self.m.tool("engram_distill_submit", episode_id="12345", bullets=GOOD)
+        text, err = self.m.tool("alethea_distill_submit", episode_id="12345", bullets=GOOD)
         self.assertTrue(err)
         self.assertIn("not accepted", text)
-        text, err = self.m.tool("engram_distill_submit", episode_id="1",
+        text, err = self.m.tool("alethea_distill_submit", episode_id="1",
                                 bullets=["x"] * 7)
         self.assertTrue(err)
         self.assertEqual(self.d.llm_memories(), [])
 
     def test_offline_daemon_is_fail_soft(self):
-        m = Mcp(make_home(), extra_env={"ENGRAM_LLM_CONSOLIDATE": "1", "ENGRAM_PORT": "1"})
+        m = Mcp(make_home(), extra_env={"ALETHEA_LLM_CONSOLIDATE": "1", "ALETHEA_PORT": "1"})
         m.init()
-        self.assertEqual(m.tool("engram_consolidate_pending"), ("memory offline", False))
-        self.assertEqual(m.tool("engram_distill_submit", episode_id="1", bullets=[]),
+        self.assertEqual(m.tool("alethea_consolidate_pending"), ("memory offline", False))
+        self.assertEqual(m.tool("alethea_distill_submit", episode_id="1", bullets=[]),
                          ("memory offline", False))
         m.close()
 
@@ -577,47 +577,47 @@ class McpTest(Base):
 
 class AdapterConfigTest(unittest.TestCase):
     def cfg(self, **kw):
-        c = {"ENGRAM_LLM_API": "openai", "ENGRAM_LLM_MODEL": "m1", "ENGRAM_LLM_URL": "",
-             "ENGRAM_LLM_ALLOW_REMOTE": False, "ENGRAM_LLM_TIMEOUT": "30"}
+        c = {"ALETHEA_LLM_API": "openai", "ALETHEA_LLM_MODEL": "m1", "ALETHEA_LLM_URL": "",
+             "ALETHEA_LLM_ALLOW_REMOTE": False, "ALETHEA_LLM_TIMEOUT": "30"}
         c.update(kw)
         return c
 
     def test_remote_needs_acknowledgement_https_and_a_key(self):
-        env = {"ENGRAM_LLM_API_KEY": KEY}
+        env = {"ALETHEA_LLM_API_KEY": KEY}
         with self.assertRaises(llm_api.ConfigError) as cm:
             llm_api.build_adapter(self.cfg(), env)  # default URL is remote, not acknowledged
-        self.assertIn("ENGRAM_LLM_ALLOW_REMOTE", str(cm.exception))
-        a = llm_api.build_adapter(self.cfg(ENGRAM_LLM_ALLOW_REMOTE=True), env)
+        self.assertIn("ALETHEA_LLM_ALLOW_REMOTE", str(cm.exception))
+        a = llm_api.build_adapter(self.cfg(ALETHEA_LLM_ALLOW_REMOTE=True), env)
         self.assertEqual((a.host, a.url), ("api.openai.com", llm_api.PROVIDERS["openai"]))
-        b = llm_api.build_adapter(self.cfg(ENGRAM_LLM_API="anthropic",
-                                           ENGRAM_LLM_ALLOW_REMOTE=True), env)
+        b = llm_api.build_adapter(self.cfg(ALETHEA_LLM_API="anthropic",
+                                           ALETHEA_LLM_ALLOW_REMOTE=True), env)
         self.assertEqual(b.url, llm_api.PROVIDERS["anthropic"])
-        bad = [dict(ENGRAM_LLM_URL="http://example.com/v1", ENGRAM_LLM_ALLOW_REMOTE=True),
-               dict(ENGRAM_LLM_URL="https://u:p@example.com/v1", ENGRAM_LLM_ALLOW_REMOTE=True),
-               dict(ENGRAM_LLM_URL="ftp://example.com/v1", ENGRAM_LLM_ALLOW_REMOTE=True),
-               dict(ENGRAM_LLM_URL="https:///x", ENGRAM_LLM_ALLOW_REMOTE=True),
-               dict(ENGRAM_LLM_URL="http://127.0.0.1.evil.com/", ENGRAM_LLM_ALLOW_REMOTE=True),
-               dict(ENGRAM_LLM_MODEL=""), dict(ENGRAM_LLM_API="gemini"),
-               dict(ENGRAM_LLM_ALLOW_REMOTE=True, ENGRAM_LLM_URL="https://x.example/\nHost: y")]
+        bad = [dict(ALETHEA_LLM_URL="http://example.com/v1", ALETHEA_LLM_ALLOW_REMOTE=True),
+               dict(ALETHEA_LLM_URL="https://u:p@example.com/v1", ALETHEA_LLM_ALLOW_REMOTE=True),
+               dict(ALETHEA_LLM_URL="ftp://example.com/v1", ALETHEA_LLM_ALLOW_REMOTE=True),
+               dict(ALETHEA_LLM_URL="https:///x", ALETHEA_LLM_ALLOW_REMOTE=True),
+               dict(ALETHEA_LLM_URL="http://127.0.0.1.evil.com/", ALETHEA_LLM_ALLOW_REMOTE=True),
+               dict(ALETHEA_LLM_MODEL=""), dict(ALETHEA_LLM_API="gemini"),
+               dict(ALETHEA_LLM_ALLOW_REMOTE=True, ALETHEA_LLM_URL="https://x.example/\nHost: y")]
         for kw in bad:
             with self.subTest(kw):
                 with self.assertRaises(llm_api.ConfigError):
                     llm_api.build_adapter(self.cfg(**kw), env)
         with self.assertRaises(llm_api.ConfigError):  # remote without a key
-            llm_api.build_adapter(self.cfg(ENGRAM_LLM_ALLOW_REMOTE=True), {})
+            llm_api.build_adapter(self.cfg(ALETHEA_LLM_ALLOW_REMOTE=True), {})
         with self.assertRaises(llm_api.ConfigError):  # header-injection key
-            llm_api.build_adapter(self.cfg(ENGRAM_LLM_ALLOW_REMOTE=True),
-                                  {"ENGRAM_LLM_API_KEY": "k\r\nX-Evil: 1"})
+            llm_api.build_adapter(self.cfg(ALETHEA_LLM_ALLOW_REMOTE=True),
+                                  {"ALETHEA_LLM_API_KEY": "k\r\nX-Evil: 1"})
 
     def test_loopback_http_needs_no_acknowledgement_or_key(self):
-        a = llm_api.build_adapter(self.cfg(ENGRAM_LLM_URL="http://127.0.0.1:9/v1/x"), {})
+        a = llm_api.build_adapter(self.cfg(ALETHEA_LLM_URL="http://127.0.0.1:9/v1/x"), {})
         self.assertTrue(a.loopback)
-        a = llm_api.build_adapter(self.cfg(ENGRAM_LLM_URL="http://[::1]:9/v1/x"), {})
+        a = llm_api.build_adapter(self.cfg(ALETHEA_LLM_URL="http://[::1]:9/v1/x"), {})
         self.assertTrue(a.loopback)
 
     def test_key_not_in_repr_or_errors(self):
-        a = llm_api.build_adapter(self.cfg(ENGRAM_LLM_URL="http://127.0.0.1:9/x"),
-                                  {"ENGRAM_LLM_API_KEY": KEY})
+        a = llm_api.build_adapter(self.cfg(ALETHEA_LLM_URL="http://127.0.0.1:9/x"),
+                                  {"ALETHEA_LLM_API_KEY": KEY})
         self.assertNotIn(KEY, repr(a))
         self.assertNotIn(KEY, repr(vars(a.breaker)))
 
@@ -648,8 +648,8 @@ class DaemonConfigTest(Base):
         with mock.patch.object(socket.socket, "connect", spy), \
                 mock.patch.object(urllib.request.OpenerDirector, "open",
                                   side_effect=AssertionError("network used")) as op:
-            d = self.mk({"ENGRAM_LLM_API": "openai", "ENGRAM_LLM_MODEL": "gpt-x",
-                         "ENGRAM_LLM_API_KEY": KEY})
+            d = self.mk({"ALETHEA_LLM_API": "openai", "ALETHEA_LLM_MODEL": "gpt-x",
+                         "ALETHEA_LLM_API_KEY": KEY})
             d.episode()
             for _ in range(3):
                 d.sleep()
@@ -657,7 +657,7 @@ class DaemonConfigTest(Base):
         self.assertEqual(calls, [])
         st = d.call("status")
         self.assertEqual(st["distiller"]["mode"], "off")
-        self.assertIn("ENGRAM_LLM_ALLOW_REMOTE", st["distiller"]["error"])
+        self.assertIn("ALETHEA_LLM_ALLOW_REMOTE", st["distiller"]["error"])
         self.assertNotIn(KEY, json.dumps(st))
         self.assertGreaterEqual(len(d.memories(kind="episodic")), 1)  # extractive carried on
 
@@ -680,17 +680,17 @@ class ApiBase(Base):
         return (openai_reply if self.provider == "openai" else anthropic_reply)(text)
 
     def api(self, stub, extra=None, **kw):
-        env = {"ENGRAM_LLM_API": self.provider, "ENGRAM_LLM_MODEL": "test-model",
-               "ENGRAM_LLM_API_KEY": KEY,
-               "ENGRAM_LLM_URL": stub.url("/v1/chat/completions" if self.provider == "openai"
+        env = {"ALETHEA_LLM_API": self.provider, "ALETHEA_LLM_MODEL": "test-model",
+               "ALETHEA_LLM_API_KEY": KEY,
+               "ALETHEA_LLM_URL": stub.url("/v1/chat/completions" if self.provider == "openai"
                                           else "/v1/messages"),
-               "ENGRAM_LLM_TIMEOUT": "2"}
+               "ALETHEA_LLM_TIMEOUT": "2"}
         env.update(extra or {})
         return self.mk(env, **kw)
 
     def everything(self, d):
         """All text a user or log could see, for the key grep."""
-        parts = [json.dumps(d.call("status")), repr(d.engram.llm.adapter), json.dumps(d.sleep())]
+        parts = [json.dumps(d.call("status")), repr(d.alethea.llm.adapter), json.dumps(d.sleep())]
         for name in os.listdir(d.home):
             p = os.path.join(d.home, name)
             if os.path.isfile(p) and not name.endswith(".sock"):
@@ -760,14 +760,14 @@ class ApiModeTest(ApiBase):
         d.call("sleep", {})
         d.call("session_end", {"session_id": "s1", "wait": True})
         self.assertEqual(len(s.requests), 0)
-        d.engram.sleep_interval = d.engram.idle_sleep = 0
-        d.engram._activity_since_sleep = True
-        self.assertTrue(d.engram.sleep_tick())  # the real timer path
+        d.alethea.sleep_interval = d.alethea.idle_sleep = 0
+        d.alethea._activity_since_sleep = True
+        self.assertTrue(d.alethea.sleep_tick())  # the real timer path
         self.assertEqual(len(s.requests), 1)
 
     def test_per_cycle_budget_and_daily_cap(self):
         s = self.stub(lambda n, p, h, b: self.reply("[]"))
-        d = self.api(s, {"ENGRAM_LLM_BUDGET": "2", "ENGRAM_LLM_DAILY_CAP": "3"})
+        d = self.api(s, {"ALETHEA_LLM_BUDGET": "2", "ALETHEA_LLM_DAILY_CAP": "3"})
         for i in range(6):
             d.episode(session="s%d" % i)
         d.sleep()
@@ -884,7 +884,7 @@ class ApiFailureTest(ApiBase):
 
     def test_circuit_breaker_stops_calls_then_ttl_falls_back(self):
         s = self.stub(lambda n, p, h, b: (500, {}, b"no"))
-        d = self.api(s, {"ENGRAM_LLM_PENDING_TTL": "100000"})
+        d = self.api(s, {"ALETHEA_LLM_PENDING_TTL": "100000"})
         for i in range(5):
             d.episode(session="s%d" % i)
         d.sleep()
@@ -918,15 +918,15 @@ class ApiFailureTest(ApiBase):
 
         def script(n, path, headers, body):
             # lock discipline: while the "model" is being called the engine lock must be free
-            got = d.engram.lock.acquire(timeout=1.0)
+            got = d.alethea.lock.acquire(timeout=1.0)
             locked.append(got)
             if got:
-                d.engram.lock.release()
+                d.alethea.lock.release()
             s.release.wait(60)  # hang until the test releases it
             return self.reply("[]")
 
         s = self.stub(script)
-        d = self.api(s, {"ENGRAM_LLM_TIMEOUT": "20"})
+        d = self.api(s, {"ALETHEA_LLM_TIMEOUT": "20"})
         d.episode()
         t = threading.Thread(target=d.sleep, daemon=True)
         t.start()
@@ -945,7 +945,7 @@ class ApiFailureTest(ApiBase):
 
     def test_call_is_bounded_by_the_timeout(self):
         s = self.stub(lambda n, p, h, b: None)  # hangs
-        d = self.api(s, {"ENGRAM_LLM_TIMEOUT": "1.5"})
+        d = self.api(s, {"ALETHEA_LLM_TIMEOUT": "1.5"})
         d.episode()
         res, elapsed = timed(d.sleep)
         self.assertTrue(res["ok"])
@@ -977,9 +977,9 @@ class ApiFailureTest(ApiBase):
 
         threading.Thread(target=serve, daemon=True).start()
         self.addCleanup(done.set)
-        a = llm_api.build_adapter({"ENGRAM_LLM_API": "openai", "ENGRAM_LLM_MODEL": "m",
-                                   "ENGRAM_LLM_URL": "http://127.0.0.1:%d/x" % srv.getsockname()[1],
-                                   "ENGRAM_LLM_TIMEOUT": "1.0"}, {})
+        a = llm_api.build_adapter({"ALETHEA_LLM_API": "openai", "ALETHEA_LLM_MODEL": "m",
+                                   "ALETHEA_LLM_URL": "http://127.0.0.1:%d/x" % srv.getsockname()[1],
+                                   "ALETHEA_LLM_TIMEOUT": "1.0"}, {})
         out = {}
 
         def run():
@@ -1012,9 +1012,9 @@ class ApiKeyTest(ApiBase):
                 d.sleep()
         blob = "\n".join([err.getvalue(), self.everything(d), json.dumps(d.call("status")),
                           json.dumps(d.call("dump", {})), json.dumps(d.call("sleep", {}))])
-        m = Mcp(d.home, extra_env={"ENGRAM_LLM_CONSOLIDATE": "1"})
+        m = Mcp(d.home, extra_env={"ALETHEA_LLM_CONSOLIDATE": "1"})
         m.init()
-        blob += json.dumps(m.rpc("tools/list")) + m.tool("engram_status")[0]
+        blob += json.dumps(m.rpc("tools/list")) + m.tool("alethea_status")[0]
         m.close()
         self.assertTrue(s.requests)
         self.assertNotIn(KEY, blob)

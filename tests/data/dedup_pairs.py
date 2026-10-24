@@ -23,7 +23,7 @@ PAIRS = [
     ("identifier", "the client calls the v1 endpoint", "the client calls the v2 endpoint"),
     ("identifier", "upload artifacts to s3 nightly", "upload artifacts to s4 nightly"),
     ("identifier", "this bug is p0 for the release", "this bug is p1 for the release"),
-    ("identifier", "config lives in /etc/engram/app.conf", "config lives in /opt/engram/app.conf"),
+    ("identifier", "config lives in /etc/alethea/app.conf", "config lives in /opt/alethea/app.conf"),
     ("identifier", "call getUserName before saving", "call getUserId before saving"),
     ("identifier", "set maxRetries to the default", "set minRetries to the default"),
     # antonyms
@@ -75,7 +75,7 @@ LONG_PAIRS = [
     _long("p0", "triage the p0 bug", "triage the p1 bug"),
     _long("p0", "escalate any p0 ticket", "escalate any p2 ticket"),
     _long("p0", "page oncall for p0 alerts", "page oncall for p3 alerts"),
-    _long("path", "edit /etc/engram/app.conf", "edit /opt/engram/app.conf"),
+    _long("path", "edit /etc/alethea/app.conf", "edit /opt/alethea/app.conf"),
     _long("path", "read src/core/main.py", "read src/util/main.py"),
     _long("path", "delete /var/log/app/out.log", "delete /var/tmp/app/out.log"),
     _long("camel", "call getUserName", "call getUserId"),

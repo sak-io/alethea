@@ -9,29 +9,41 @@ DOWNSCALE_INTERVAL_S = 6 * 3600
 MAX_REQUEST_BYTES = 1 << 20
 
 DEFAULTS = {
-    "ENGRAM_HOME": "~/.engram",
-    "ENGRAM_EMBEDDER": "hash",
-    "ENGRAM_EMBEDDER_LOAD_TIMEOUT": 120,   # seconds the model may take to load (background)
-    "ENGRAM_EMBEDDER_TIMEOUT": "1.0",      # seconds one embedding call may take (float)
-    "ENGRAM_SLEEP_INTERVAL": 900,
-    "ENGRAM_IDLE_SLEEP": 180,
-    "ENGRAM_LLM_CONSOLIDATE": False,       # T27: off by default; see docs/adr/0012
-    "ENGRAM_LLM_API": "",                  # "", "openai" or "anthropic" (direct-API mode)
-    "ENGRAM_LLM_ALLOW_REMOTE": False,      # acknowledge that transcripts leave this machine
-    "ENGRAM_LLM_URL": "",
-    "ENGRAM_LLM_MODEL": "",
-    "ENGRAM_LLM_PENDING_TTL": 3 * 24 * 3600,   # seconds a queued episode waits for the host
-    "ENGRAM_LLM_BUDGET": 5,                # API mode: episodes per sleep cycle
-    "ENGRAM_LLM_DAILY_CAP": 50,            # API mode: calls per UTC day
-    "ENGRAM_LLM_TIMEOUT": "30",            # API mode: seconds per call (float)
+    "ALETHEA_HOME": "~/.alethea",
+    "ALETHEA_EMBEDDER": "hash",
+    "ALETHEA_EMBEDDER_LOAD_TIMEOUT": 120,   # seconds the model may take to load (background)
+    "ALETHEA_EMBEDDER_TIMEOUT": "1.0",      # seconds one embedding call may take (float)
+    "ALETHEA_SLEEP_INTERVAL": 900,
+    "ALETHEA_IDLE_SLEEP": 180,
+    "ALETHEA_LLM_CONSOLIDATE": False,       # T27: off by default; see docs/adr/0012
+    "ALETHEA_LLM_API": "",                  # "", "openai" or "anthropic" (direct-API mode)
+    "ALETHEA_LLM_ALLOW_REMOTE": False,      # acknowledge that transcripts leave this machine
+    "ALETHEA_LLM_URL": "",
+    "ALETHEA_LLM_MODEL": "",
+    "ALETHEA_LLM_PENDING_TTL": 3 * 24 * 3600,   # seconds a queued episode waits for the host
+    "ALETHEA_LLM_BUDGET": 5,                # API mode: episodes per sleep cycle
+    "ALETHEA_LLM_DAILY_CAP": 50,            # API mode: calls per UTC day
+    "ALETHEA_LLM_TIMEOUT": "30",            # API mode: seconds per call (float)
 }
-# ENGRAM_LLM_API_KEY is deliberately NOT here: it is read from the process environment only,
+# ALETHEA_LLM_API_KEY is deliberately NOT here: it is read from the process environment only,
 # never from config.json and never copied into any config dict, status or log.
 
 
 def home_dir(env=None):
     env = os.environ if env is None else env
-    return Path(env.get("ENGRAM_HOME") or DEFAULTS["ENGRAM_HOME"]).expanduser()
+    return Path(env.get("ALETHEA_HOME") or DEFAULTS["ALETHEA_HOME"]).expanduser()
+
+
+def legacy_home_hint(env=None):
+    """One-line hint when only the pre-rename data dir ~/.engram exists (never migrated automatically)."""
+    env = os.environ if env is None else env
+    if env.get("ALETHEA_HOME"):
+        return None
+    old, new = Path("~/.engram").expanduser(), Path(DEFAULTS["ALETHEA_HOME"]).expanduser()
+    if old.is_dir() and not new.exists():
+        return ("found the old data directory %s but not %s; this project was renamed from Engram. "
+                "Move it with `mv %s %s` or set ALETHEA_HOME=%s" % (old, new, old, new, old))
+    return None
 
 
 def ensure_private_dir(path):
@@ -75,6 +87,6 @@ def load_config(env=None, home=None):
 
 def llm_mode(cfg):
     """'off' (default), 'host' (host-callback) or 'api' (direct API; needs a valid adapter)."""
-    if not cfg.get("ENGRAM_LLM_CONSOLIDATE"):
+    if not cfg.get("ALETHEA_LLM_CONSOLIDATE"):
         return "off"
-    return "api" if str(cfg.get("ENGRAM_LLM_API") or "").strip() else "host"
+    return "api" if str(cfg.get("ALETHEA_LLM_API") or "").strip() else "host"

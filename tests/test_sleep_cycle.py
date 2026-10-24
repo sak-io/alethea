@@ -7,10 +7,10 @@ import time
 import unittest
 from unittest import mock
 
-from engram import consolidate, encode, vectorize
-from engram import markers
-from engram.cortex import Cortex, DAY_S
-from engram.fairlock import FairLock
+from alethea import consolidate, encode, vectorize
+from alethea import markers
+from alethea.cortex import Cortex, DAY_S
+from alethea.fairlock import FairLock
 
 _SYL = "ba ke di mo tu ra ne si lo pa vi ze".split()
 # ~1.7k pseudo-words: a natural-language-sized vocabulary, so FTS and the vector scan
@@ -306,8 +306,8 @@ class PerformanceBudgetTest(unittest.TestCase):
             clock.t += 2000
         return c
 
-    @unittest.skipUnless(os.environ.get("ENGRAM_SLOW_TESTS"),
-                         "slow benchmark (~19 s); set ENGRAM_SLOW_TESTS=1")
+    @unittest.skipUnless(os.environ.get("ALETHEA_SLOW_TESTS"),
+                         "slow benchmark (~19 s); set ALETHEA_SLOW_TESTS=1")
     def test_2k_rows_400_sessions_over_1k_memories_under_budget(self):
         c = self.corpus(1000, 400)
         self.assertEqual(len(c.journal_pending()), 2000)
@@ -322,8 +322,8 @@ class PerformanceBudgetTest(unittest.TestCase):
         self.assertLess(elapsed, 30.0, "consolidation took %.1fs" % elapsed)
         c.close()
 
-    @unittest.skipUnless(os.environ.get("ENGRAM_SLOW_TESTS"),
-                         "slow worst-case benchmark (~40 s); set ENGRAM_SLOW_TESTS=1")
+    @unittest.skipUnless(os.environ.get("ALETHEA_SLOW_TESTS"),
+                         "slow worst-case benchmark (~40 s); set ALETHEA_SLOW_TESTS=1")
     def test_all_durable_2k_rows_400_sessions_1k_memories(self):
         """Worst case: every turn is a novel durable decision (2400 encodes).
 
@@ -342,8 +342,8 @@ class PerformanceBudgetTest(unittest.TestCase):
         self.assertLess(elapsed, BUDGET_ALL_DURABLE, "took %.1fs" % elapsed)
         c.close()
 
-    @unittest.skipUnless(os.environ.get("ENGRAM_SLOW_TESTS"),
-                         "timing benchmark (~1.2 s); set ENGRAM_SLOW_TESTS=1")
+    @unittest.skipUnless(os.environ.get("ALETHEA_SLOW_TESTS"),
+                         "timing benchmark (~1.2 s); set ALETHEA_SLOW_TESTS=1")
     def test_cost_per_episode_stays_flat_as_memories_grow(self):
         def per_episode(memories):
             c = self.corpus(memories, 15)
@@ -362,7 +362,7 @@ class DifferentialDedupTest(unittest.TestCase):
 
     @staticmethod
     def reference(cortex, content, embedder_id):
-        from engram import recall
+        from alethea import recall
         best, best_m = 0.0, None
         for m in recall.candidates(cortex, content, embedder_id=embedder_id,
                                   relevance_floor=False):
@@ -540,7 +540,7 @@ class PurgeSafetyTest(PurgeTest):
             self.c.meta_set(k + str(rid), "1")
         self.c.meta_set("consol_poison:99999", "1")
         consolidate.purge_journal(self.c)
-        left = {r["key"] for r in self.c.db.execute("SELECT key FROM engram_meta")}
+        left = {r["key"] for r in self.c.db.execute("SELECT key FROM alethea_meta")}
         self.assertFalse({k for k in left if k.endswith(":%d" % rid)})
         self.assertIn("consol_poison:99999", left)
 
@@ -574,7 +574,7 @@ class FastPathEquivalenceTest(unittest.TestCase):
         self.assertEqual(vectorize.cosine_many(q, [b"\x00\x00\x80\x3f"]), [0.0])
 
     def test_recall_candidates_top_pool_is_exact(self):
-        from engram import recall
+        from alethea import recall
         rng = random.Random(9)
         c = Cortex(":memory:", clock=Clock())
         for i in range(300):

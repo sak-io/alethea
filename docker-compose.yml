@@ -1,22 +1,22 @@
-# Engram sidecar. Usage and threat notes: docs/docker.md
-#   export ENGRAM_TOKEN="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
+# Alethea sidecar. Usage and threat notes: docs/docker.md
+#   export ALETHEA_TOKEN="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
 #   docker compose up -d --build
-# No default token exists: compose refuses to start while ENGRAM_TOKEN is unset or empty.
+# No default token exists: compose refuses to start while ALETHEA_TOKEN is unset or empty.
 services:
-  engram:
+  alethea:
     build: .
-    image: engram-sidecar:local
+    image: alethea-sidecar:local
     restart: unless-stopped
     environment:
-      ENGRAM_TOKEN: ${ENGRAM_TOKEN:?set ENGRAM_TOKEN (at least 16 bytes); there is no default}
-      ENGRAM_CONTAINER: "1"
-      ENGRAM_BIND: 0.0.0.0     # inside the container only; the host side is loopback (below)
-      ENGRAM_PORT: "47600"
-      ENGRAM_HOME: /data
+      ALETHEA_TOKEN: ${ALETHEA_TOKEN:?set ALETHEA_TOKEN (at least 16 bytes); there is no default}
+      ALETHEA_CONTAINER: "1"
+      ALETHEA_BIND: 0.0.0.0     # inside the container only; the host side is loopback (below)
+      ALETHEA_PORT: "47600"
+      ALETHEA_HOME: /data
     ports:
-      - "127.0.0.1:${ENGRAM_HOST_PORT:-47600}:47600"   # loopback ONLY, never 0.0.0.0
+      - "127.0.0.1:${ALETHEA_HOST_PORT:-47600}:47600"   # loopback ONLY, never 0.0.0.0
     volumes:
-      - engram-data:/data
+      - alethea-data:/data
     read_only: true
     tmpfs:
       - /tmp
@@ -25,4 +25,4 @@ services:
       - no-new-privileges:true
 
 volumes:
-  engram-data:
+  alethea-data:

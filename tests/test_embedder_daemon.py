@@ -1,6 +1,6 @@
 """A slow, hung or failing embedder never degrades the daemon (T25 review, ADR 0010).
 
-Real Engram + Server on a temp ENGRAM_HOME, real Unix-socket client calls with the 2 s budget a
+Real Alethea + Server on a temp ALETHEA_HOME, real Unix-socket client calls with the 2 s budget a
 hook has. The embedder is a controllable test double (tests/slow_embedder.py); the real
 fastembed package is exercised in the last class when it is installed.
 """
@@ -11,8 +11,8 @@ import threading
 import time
 import unittest
 
-from engram import client, vectorize
-from engram.daemon import Engram, Server
+from alethea import client, vectorize
+from alethea.daemon import Alethea, Server
 from tests import slow_embedder
 from tests.daemon_helpers import ROOT, make_home, spawn, wait_up
 
@@ -24,27 +24,27 @@ DECISION = "We decided to use postgres for the billing ledger because it needs t
 
 
 class Daemon:
-    """Engram + Server in threads of this process (like tests.daemon_helpers.InProc) with env."""
+    """Alethea + Server in threads of this process (like tests.daemon_helpers.InProc) with env."""
 
     def __init__(self, ctl, extra_env=None):
         vectorize._reset_for_tests()
         slow_embedder.register(ctl)
         self.ctl = ctl
         self.home = make_home()
-        self.env = {"ENGRAM_HOME": self.home, "PATH": os.environ.get("PATH", ""),
-                    "ENGRAM_EMBEDDER": "slow:x"}
+        self.env = {"ALETHEA_HOME": self.home, "PATH": os.environ.get("PATH", ""),
+                    "ALETHEA_EMBEDDER": "slow:x"}
         self.env.update(extra_env or {})
-        self.engram = Engram(home=self.home, env=self.env)
+        self.alethea = Alethea(home=self.home, env=self.env)
         ctl.lock_probe = self._lock_free
-        self.server = Server(self.engram)
+        self.server = Server(self.alethea)
         assert self.server.acquire_instance()
         self.server.start()
-        self.cenv = {"ENGRAM_HOME": self.home}
+        self.cenv = {"ALETHEA_HOME": self.home}
 
     def _lock_free(self):
         """Called on the embedder's worker thread: the engine lock must be free. Requests that
         wait for an embedding do so outside the lock, so any owner here is a violation."""
-        return self.engram.lock._owner is None
+        return self.alethea.lock._owner is None
 
     def call(self, verb, params=None, budget=BUDGET):
         t = time.monotonic()
@@ -58,8 +58,8 @@ class Daemon:
         shutil.rmtree(self.home, ignore_errors=True)
 
     def rows(self):
-        with self.engram.lock:
-            return [tuple(r) for r in self.engram.cortex.db.execute(
+        with self.alethea.lock:
+            return [tuple(r) for r in self.alethea.cortex.db.execute(
                 "SELECT embedder_id, length(vector)/4 FROM memories ORDER BY rowid")]
 
 
@@ -117,7 +117,7 @@ class SlowLoadTest(Base):
 
     def test_load_deadline_abandons_a_stuck_load(self):
         ctl = slow_embedder.Control(load_delay=30.0)
-        d = self.start(ctl, ENGRAM_EMBEDDER_LOAD_TIMEOUT="1")
+        d = self.start(ctl, ALETHEA_EMBEDDER_LOAD_TIMEOUT="1")
         time.sleep(1.3)
         r, dt = d.call("status")
         self.assertLess(dt, FAST)
@@ -174,10 +174,10 @@ class SlowEmbedTest(Base):
         self.assertTrue(vectorize.wait_settled(5))
         self.all_verbs_fast(d, BUDGET, "slowembed")
 
-    @unittest.skipUnless(os.environ.get("ENGRAM_SLOW_TESTS"), "slow: set ENGRAM_SLOW_TESTS=1")
+    @unittest.skipUnless(os.environ.get("ALETHEA_SLOW_TESTS"), "slow: set ALETHEA_SLOW_TESTS=1")
     def test_call_returning_after_the_timeout_counts_as_timeout_not_dense_vector(self):
         ctl = slow_embedder.Control(embed_delay=0.8)
-        d = self.start(ctl, ENGRAM_EMBEDDER_TIMEOUT="0.3")
+        d = self.start(ctl, ALETHEA_EMBEDDER_TIMEOUT="0.3")
         self.assertTrue(vectorize.wait_settled(5))
         r, dt = d.call("remember", {"content": "A fact that the slow model embeds in 0.8 seconds"})
         self.assertLess(dt, 0.3 + FAST)
@@ -188,7 +188,7 @@ class SlowEmbedTest(Base):
 
     def test_embedder_timeout_is_configurable(self):
         ctl = slow_embedder.Control(embed_delay=0.6)
-        d = self.start(ctl, ENGRAM_EMBEDDER_TIMEOUT="0.2")
+        d = self.start(ctl, ALETHEA_EMBEDDER_TIMEOUT="0.2")
         self.assertTrue(vectorize.wait_settled(5))
         r, dt = d.call("remember", {"content": "Configurable timeout fact about invoices"})
         self.assertLess(dt, 0.2 + FAST)
@@ -210,11 +210,11 @@ class HangTest(Base):
 
     def test_no_thread_leak_over_200_calls_with_a_hung_embedder(self):
         ctl = slow_embedder.Control(hang=True)
-        d = self.start(ctl, ENGRAM_EMBEDDER_TIMEOUT="0.05")
+        d = self.start(ctl, ALETHEA_EMBEDDER_TIMEOUT="0.05")
         self.assertTrue(vectorize.wait_settled(5))
         base = threading.active_count()
         for i in range(200):
-            r = d.engram.handle("remember", {"content": "hung call number %d about invoices" % i})
+            r = d.alethea.handle("remember", {"content": "hung call number %d about invoices" % i})
             self.assertTrue(r.get("ok"))
         self.assertLessEqual(threading.active_count(), base + 2)
         self.assertLess(ctl.calls, 5)   # one stuck call, then the breaker / busy worker bypass it
@@ -225,7 +225,7 @@ class HangTest(Base):
         self.assertTrue(vectorize.wait_settled(5))
         base = threading.active_count()
         for i in range(200):
-            self.assertTrue(d.engram.handle("remember", {"content": "failing call %d about invoices" % i})["ok"])
+            self.assertTrue(d.alethea.handle("remember", {"content": "failing call %d about invoices" % i})["ok"])
         self.assertLessEqual(threading.active_count(), base + 2)
 
 
@@ -238,14 +238,14 @@ class BreakerTest(Base):
         d = self.start(ctl)
         self.assertTrue(vectorize.wait_settled(5))
         for i in range(3):
-            d.engram.handle("remember", {"content": "breaker warmup %d about invoices" % i})
+            d.alethea.handle("remember", {"content": "breaker warmup %d about invoices" % i})
         self.assertEqual(ctl.calls, 3)
-        r = d.engram.handle("status", {})
+        r = d.alethea.handle("status", {})
         self.assertEqual(r["embedder_state"], "falling-back")
         self.assertIn("circuit breaker", r["embedder_reason"])
         t = time.monotonic()
         for i in range(30):
-            d.engram.handle("remember", {"content": "during cooldown %d about invoices" % i})
+            d.alethea.handle("remember", {"content": "during cooldown %d about invoices" % i})
         self.assertLess(time.monotonic() - t, 0.3)      # no embedder calls: nothing waits
         self.assertEqual(ctl.calls, 3)
         self.assertEqual({row[0] for row in d.rows()}, {HASH_ID})
@@ -253,16 +253,16 @@ class BreakerTest(Base):
         ctl.raises = False
         time.sleep(0.5)
         t = time.monotonic()
-        d.engram.handle("remember", {"content": "this request triggers the probe about invoices"})
+        d.alethea.handle("remember", {"content": "this request triggers the probe about invoices"})
         self.assertLess(time.monotonic() - t, 0.3)      # served hashed, the probe did not block it
         self.assertEqual(d.rows()[-1][0], HASH_ID)
         time.sleep(0.3)
         self.assertEqual(ctl.calls, 4)                  # exactly one probe call
-        d.engram.handle("remember", {"content": "after recovery the dense embedder is back"})
+        d.alethea.handle("remember", {"content": "after recovery the dense embedder is back"})
         self.assertEqual(d.rows()[-1], (DENSE_ID, 384))
-        self.assertFalse(d.engram.handle("status", {})["embedder_falling_back"])
+        self.assertFalse(d.alethea.handle("status", {})["embedder_falling_back"])
 
-    @unittest.skipUnless(os.environ.get("ENGRAM_SLOW_TESTS"), "slow: set ENGRAM_SLOW_TESTS=1")
+    @unittest.skipUnless(os.environ.get("ALETHEA_SLOW_TESTS"), "slow: set ALETHEA_SLOW_TESTS=1")
     def test_failed_probe_doubles_the_cooldown(self):
         ctl = slow_embedder.Control(raises=True)
         old = vectorize.COOLDOWN_MIN
@@ -271,15 +271,15 @@ class BreakerTest(Base):
         d = self.start(ctl)
         self.assertTrue(vectorize.wait_settled(5))
         for i in range(3):
-            d.engram.handle("remember", {"content": "open the breaker %d about invoices" % i})
+            d.alethea.handle("remember", {"content": "open the breaker %d about invoices" % i})
         time.sleep(0.3)
-        d.engram.handle("remember", {"content": "probe me please about invoices"})
+        d.alethea.handle("remember", {"content": "probe me please about invoices"})
         time.sleep(0.2)
         self.assertEqual(ctl.calls, 4)
         self.assertGreater(vectorize._cooldown, 0.3)    # 0.2 doubled
         calls = ctl.calls
         for i in range(10):
-            d.engram.handle("remember", {"content": "still cooling %d about invoices" % i})
+            d.alethea.handle("remember", {"content": "still cooling %d about invoices" % i})
         self.assertEqual(ctl.calls, calls)
 
 
@@ -292,7 +292,7 @@ class LockDisciplineTest(Base):
         vectorize._CACHE_MAX = 0
         self.addCleanup(setattr, vectorize, "_CACHE_MAX", old)
         # no automatic sleep cycle (it legitimately holds the lock per batch)
-        d = self.start(ctl, ENGRAM_IDLE_SLEEP="999999", ENGRAM_SLEEP_INTERVAL="999999")
+        d = self.start(ctl, ALETHEA_IDLE_SLEEP="999999", ALETHEA_SLEEP_INTERVAL="999999")
         self.assertTrue(vectorize.wait_settled(5))
         sid = {"session_id": "s1", "cwd": "/tmp/x"}
         seen = {}
@@ -333,7 +333,7 @@ class LockDisciplineTest(Base):
 class StatusAndClampTest(Base):
     def test_status_after_a_timeout_names_the_reason_and_the_hashed_dim(self):
         ctl = slow_embedder.Control(embed_delay=0.6)
-        d = self.start(ctl, ENGRAM_EMBEDDER_TIMEOUT="0.2")
+        d = self.start(ctl, ALETHEA_EMBEDDER_TIMEOUT="0.2")
         self.assertTrue(vectorize.wait_settled(5))
         r, _ = d.call("status")
         self.assertEqual((r["embedder_state"], r["embedder_dim"]), ("ready", 384))
@@ -350,8 +350,8 @@ class StatusAndClampTest(Base):
         d = self.start(ctl)
         self.assertTrue(vectorize.wait_settled(5))
         for i in range(3):
-            d.engram.handle("remember", {"content": "raising model %d about invoices" % i})
-        r = d.engram.handle("status", {})
+            d.alethea.handle("remember", {"content": "raising model %d about invoices" % i})
+        r = d.alethea.handle("status", {})
         self.assertIn("circuit breaker open", r["embedder_reason"])
         self.assertIn("error RuntimeError", r["embedder_reason"])
         self.assertGreater(r["embedder_retry_in_s"], 0)
@@ -367,30 +367,30 @@ class StatusAndClampTest(Base):
 
     def test_clamp_applies_to_the_daemon_config(self):
         ctl = slow_embedder.Control()
-        self.start(ctl, ENGRAM_EMBEDDER_TIMEOUT="1e9", ENGRAM_EMBEDDER_LOAD_TIMEOUT="999999")
+        self.start(ctl, ALETHEA_EMBEDDER_TIMEOUT="1e9", ALETHEA_EMBEDDER_LOAD_TIMEOUT="999999")
         self.assertEqual((vectorize.EMBED_TIMEOUT, vectorize.LOAD_TIMEOUT), (10.0, 900.0))
 
 
-@unittest.skipUnless(os.environ.get("ENGRAM_SLOW_TESTS"), "slow: set ENGRAM_SLOW_TESTS=1")
+@unittest.skipUnless(os.environ.get("ALETHEA_SLOW_TESTS"), "slow: set ALETHEA_SLOW_TESTS=1")
 class HungProbeTest(Base):
     def test_a_probe_that_hangs_times_out_doubles_the_cooldown_and_replaces_the_worker(self):
         ctl = slow_embedder.Control(raises=True)
         old = vectorize.COOLDOWN_MIN
         vectorize.COOLDOWN_MIN = 0.3
         self.addCleanup(setattr, vectorize, "COOLDOWN_MIN", old)
-        d = self.start(ctl, ENGRAM_EMBEDDER_TIMEOUT="0.2")
+        d = self.start(ctl, ALETHEA_EMBEDDER_TIMEOUT="0.2")
         self.assertTrue(vectorize.wait_settled(5))
         base = threading.active_count()
         for i in range(3):
-            d.engram.handle("remember", {"content": "open the breaker %d about invoices" % i})
+            d.alethea.handle("remember", {"content": "open the breaker %d about invoices" % i})
         ctl.raises, ctl.hang_probe = False, True
         time.sleep(0.4)                                  # cooldown over
-        d.engram.handle("remember", {"content": "this request launches a probe that hangs"})
+        d.alethea.handle("remember", {"content": "this request launches a probe that hangs"})
         self.assertTrue(vectorize._probing)
         calls = ctl.calls
         time.sleep(0.3)                                  # past the probe deadline (call timeout)
         t = time.monotonic()
-        d.engram.handle("remember", {"content": "this request notices the hung probe"})
+        d.alethea.handle("remember", {"content": "this request notices the hung probe"})
         self.assertLess(time.monotonic() - t, 0.3)
         self.assertFalse(vectorize._probing)             # cleared: no permanent stall
         self.assertAlmostEqual(vectorize._cooldown, 0.6, places=3)   # doubled
@@ -399,9 +399,9 @@ class HungProbeTest(Base):
         # a later probe reaches a fresh worker and, now answering, closes the breaker
         ctl.hang_probe = False
         time.sleep(0.7)
-        d.engram.handle("remember", {"content": "this request launches the second probe"})
+        d.alethea.handle("remember", {"content": "this request launches the second probe"})
         time.sleep(0.3)
-        d.engram.handle("remember", {"content": "after the second probe the model is back"})
+        d.alethea.handle("remember", {"content": "after the second probe the model is back"})
         self.assertEqual(d.rows()[-1], (DENSE_ID, 384))
         self.assertLessEqual(threading.active_count(), base + 2)   # stuck worker + current one
         ctl.stop()
@@ -416,7 +416,7 @@ class RealFastembedTest(unittest.TestCase):
             import fastembed  # noqa: F401
         except ImportError:
             raise unittest.SkipTest("fastembed not installed in this interpreter "
-                                    "(pip install 'engram-memory[local]')")
+                                    "(pip install 'alethea[local]')")
 
     @staticmethod
     def _reap(proc):
@@ -430,13 +430,13 @@ class RealFastembedTest(unittest.TestCase):
     def test_blocked_download_answers_every_verb_promptly_and_status_explains(self):
         home = make_home()
         cache = make_home()
-        env = {"ENGRAM_EMBEDDER": "fastembed:sentence-transformers/all-MiniLM-L6-v2",
-               "ENGRAM_EMBEDDER_LOAD_TIMEOUT": "3", "FASTEMBED_CACHE_PATH": cache, "HF_HOME": cache}
+        env = {"ALETHEA_EMBEDDER": "fastembed:sentence-transformers/all-MiniLM-L6-v2",
+               "ALETHEA_EMBEDDER_LOAD_TIMEOUT": "3", "FASTEMBED_CACHE_PATH": cache, "HF_HOME": cache}
         proc = spawn(home, env)
         self.addCleanup(self._reap, proc)
         self.addCleanup(shutil.rmtree, home, True)
         self.assertTrue(wait_up(home, 15))
-        cenv = {"ENGRAM_HOME": home}
+        cenv = {"ALETHEA_HOME": home}
         lat = {}
         for verb, p in (("status", {}), ("remember", {"content": "The billing service uses postgres"}),
                         ("recall", {"cue": "billing postgres"}), ("ping", {}), ("briefing", {}),

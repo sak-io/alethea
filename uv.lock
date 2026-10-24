@@ -298,7 +298,7 @@ wheels = [
 ]
 
 [[package]]
-name = "engram-memory"
+name = "alethea"
 source = { editable = "." }
 
 [package.optional-dependencies]

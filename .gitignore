@@ -1,6 +1,6 @@
 __pycache__/
 *.pyc
-.engram/
+.alethea/
 *.db
 *.db-wal
 *.db-shm

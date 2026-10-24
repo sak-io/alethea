@@ -6,7 +6,7 @@ embedder_id differs from the CONFIGURED and READY embedder. Rules:
 * The engine lock is never held while embedding: a batch's rows are read under the lock, the
   vectors are computed outside it (bounded worker, breaker: ADR 0010), then the lock is taken
   briefly to write the whole batch and the cursor in ONE transaction.
-* Resumable and idempotent: the cursor, counters and settings live in `engram_meta` (key
+* Resumable and idempotent: the cursor, counters and settings live in `alethea_meta` (key
   `reembed`) and are committed with each batch, so a restart or kill -9 resumes at the next
   batch; re-running skips rows already under the target id. A write only lands if the row's
   content and embedder_id are still what was embedded (compare-and-set), so a concurrent edit
@@ -24,7 +24,7 @@ import sys
 import threading
 import time
 
-from engram import vectorize
+from alethea import vectorize
 
 DEFAULT_BATCH = 32
 MAX_BATCH = 64
@@ -41,8 +41,8 @@ _PERSIST = ("state", "target", "cursor", "done", "total", "include_identity", "b
 
 
 class Reembedder:
-    def __init__(self, engram):
-        self.e = engram
+    def __init__(self, alethea):
+        self.e = alethea
         self._m = threading.Lock()              # protects self.st (never held across I/O)
         self._stop = threading.Event()
         self._closing = False                   # daemon shutdown: leave a running run "running"
@@ -104,7 +104,7 @@ class Reembedder:
         network while the cooldown runs) so a healed server is noticed, then look again."""
         t = self.target()
         if not t["ready"] and not t["loading"] and t["configured"]:
-            vectorize.embed_batch(["engram reembed readiness probe"])
+            vectorize.embed_batch(["alethea reembed readiness probe"])
             end = time.monotonic() + vectorize.EMBED_TIMEOUT + 0.1
             while vectorize.probing() and time.monotonic() < end:
                 time.sleep(0.02)
@@ -206,7 +206,7 @@ class Reembedder:
         self._stop = threading.Event()
         with self._m:
             self._t0, self._done0 = time.monotonic(), self.st["done"]
-        th = threading.Thread(target=self._run, args=(self._stop,), name="engram-reembed",
+        th = threading.Thread(target=self._run, args=(self._stop,), name="alethea-reembed",
                               daemon=True)
         self._thread = th
         th.start()
@@ -267,7 +267,7 @@ class Reembedder:
         try:
             self._loop(stop)
         except Exception as e:  # never leave a half-state and never print memory text
-            sys.stderr.write("engram: reembed stopped: %s\n" % type(e).__name__)
+            sys.stderr.write("alethea: reembed stopped: %s\n" % type(e).__name__)
             with self._m:
                 self.st.update(state="paused", last_error="internal error %s" % type(e).__name__)
             try:
@@ -371,7 +371,7 @@ class Reembedder:
                     self.st.update(cursor=rows[-1][0], done=prev[1] + applied,
                                    failures=0, last_error=None)
                     blob = self._blob()
-                db.execute("INSERT INTO engram_meta (key,value) VALUES (?,?) "
+                db.execute("INSERT INTO alethea_meta (key,value) VALUES (?,?) "
                            "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (META_KEY, blob))
                 db.commit()
             except BaseException:

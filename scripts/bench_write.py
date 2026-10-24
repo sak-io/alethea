@@ -19,8 +19,8 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
-from engram import encode  # noqa: E402
-from engram.cortex import Cortex  # noqa: E402
+from alethea import encode  # noqa: E402
+from alethea.cortex import Cortex  # noqa: E402
 
 TECH = ["PostgreSQL", "Redis", "Kafka", "RabbitMQ", "gRPC", "GraphQL", "Terraform", "Docker",
         "Kubernetes", "SQLite", "Nginx", "Celery", "Prometheus", "Grafana", "Vault"]
@@ -45,7 +45,7 @@ def run(sizes, profile_last=0, out=None, path=None):
     cleanup = None
     if path is None:
         cleanup = tempfile.TemporaryDirectory()
-        path = os.path.join(cleanup.name, "engram.db")
+        path = os.path.join(cleanup.name, "alethea.db")
     cx = Cortex(path)
     sizes = sorted(set(sizes))
     total = sizes[-1]

@@ -29,8 +29,8 @@ def docker_ok():
 @unittest.skipUnless(docker_ok(), "no working docker daemon (live check UNVERIFIED)")
 class DockerLiveTest(unittest.TestCase):
     def test_build_run_ping_and_auth(self):
-        tag = "engram-sidecar-test:%d" % os.getpid()
-        name = "engram-t28-%d" % os.getpid()
+        tag = "alethea-sidecar-test:%d" % os.getpid()
+        name = "alethea-t28-%d" % os.getpid()
         token = secrets.token_urlsafe(32)
         s = socket.socket()
         s.bind(("127.0.0.1", 0))
@@ -39,7 +39,7 @@ class DockerLiveTest(unittest.TestCase):
         subprocess.run(["docker", "build", "-t", tag, ROOT], check=True, timeout=600)
         self.addCleanup(subprocess.run, ["docker", "rmi", "-f", tag], capture_output=True)
         self.addCleanup(subprocess.run, ["docker", "rm", "-f", "-v", name], capture_output=True)
-        subprocess.run(["docker", "run", "-d", "--name", name, "-e", "ENGRAM_TOKEN=" + token,
+        subprocess.run(["docker", "run", "-d", "--name", name, "-e", "ALETHEA_TOKEN=" + token,
                         "-p", "127.0.0.1:%d:47600" % port, tag], check=True, timeout=60)
 
         def call(req):

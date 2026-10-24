@@ -1,11 +1,11 @@
-"""engram.render: hostile memory text can never become markup/instructions (MCP path + hook path
+"""alethea.render: hostile memory text can never become markup/instructions (MCP path + hook path
 share ONE renderer), plus client.send_nowait token rules."""
 import json
 import socket
 import threading
 import unittest
 
-from engram import client, mcp_server, render
+from alethea import client, mcp_server, render
 from tests.daemon_helpers import make_home
 
 HOSTILE = [
@@ -79,10 +79,10 @@ class RenderTests(unittest.TestCase):
 
 class SendNowaitTests(unittest.TestCase):
     def test_false_when_nothing_listens_and_never_raises(self):
-        env = {"ENGRAM_HOME": make_home()}
+        env = {"ALETHEA_HOME": make_home()}
         self.assertIs(client.send_nowait("observe", {"content": "x"}, env=env), False)
         self.assertIs(client.send_nowait("observe", object(), env=env), False)
-        self.assertIs(client.send_nowait(None, {"a": float("nan")}, env={"ENGRAM_PORT": "x"}),
+        self.assertIs(client.send_nowait(None, {"a": float("nan")}, env={"ALETHEA_PORT": "x"}),
                       False)
         self.assertIs(client.send_nowait("observe", {"c": "x" * (2 << 20)}, env=env), False)
 
@@ -100,19 +100,19 @@ class SendNowaitTests(unittest.TestCase):
 
         t = threading.Thread(target=run, daemon=True)
         t.start()
-        env = {"ENGRAM_HOME": make_home(), "ENGRAM_PORT": str(srv.getsockname()[1]),
-               "ENGRAM_CONTAINER": "1", "ENGRAM_TOKEN": "t" * 20}
+        env = {"ALETHEA_HOME": make_home(), "ALETHEA_PORT": str(srv.getsockname()[1]),
+               "ALETHEA_CONTAINER": "1", "ALETHEA_TOKEN": "t" * 20}
         self.assertTrue(client.send_nowait("observe", {"content": "hi"}, env=env))
         t.join(3)
         req = json.loads(got[0].decode())
         self.assertEqual((req["verb"], req["token"]), ("observe", "t" * 20))
 
     def test_token_never_sent_to_non_loopback(self):
-        env = {"ENGRAM_HOME": make_home(), "ENGRAM_HOST": "192.0.2.1", "ENGRAM_PORT": "9",
-               "ENGRAM_CONTAINER": "1", "ENGRAM_TOKEN": "t" * 20}
+        env = {"ALETHEA_HOME": make_home(), "ALETHEA_HOST": "192.0.2.1", "ALETHEA_PORT": "9",
+               "ALETHEA_CONTAINER": "1", "ALETHEA_TOKEN": "t" * 20}
         self.assertEqual(list(client._requests("observe", {}, env)), [])
         self.assertIs(client.send_nowait("observe", {}, env=env), False)
-        env["ENGRAM_ALLOW_REMOTE_TOKEN"] = "1"
+        env["ALETHEA_ALLOW_REMOTE_TOKEN"] = "1"
         self.assertEqual(len(list(client._requests("observe", {}, env))), 1)
 
 

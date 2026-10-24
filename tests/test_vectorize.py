@@ -4,11 +4,11 @@ import subprocess
 import sys
 import unittest
 
-from engram import vectorize as v
+from alethea import vectorize as v
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEXT = "We use Postgres for the billing database"
-SNIPPET = ("from engram import vectorize as v; import sys; "
+SNIPPET = ("from alethea import vectorize as v; import sys; "
            "sys.stdout.write(v.embed(%r).hex())" % TEXT)
 
 

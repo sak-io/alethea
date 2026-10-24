@@ -8,8 +8,8 @@ import shutil
 import threading
 import time
 
-from engram import client
-from engram.daemon import Engram, Server
+from alethea import client
+from alethea.daemon import Alethea, Server
 from tests.daemon_helpers import make_home
 
 TURNS = [
@@ -37,20 +37,20 @@ class Clock:
 
 
 class Daemon:
-    """Engram + Server in this process, with its own env dict (also used by the client)."""
+    """Alethea + Server in this process, with its own env dict (also used by the client)."""
 
     def __init__(self, env=None, clock=None, flag=True):
         self.home = make_home()
-        self.env = {"ENGRAM_HOME": self.home, "PATH": os.environ.get("PATH", "")}
+        self.env = {"ALETHEA_HOME": self.home, "PATH": os.environ.get("PATH", "")}
         if flag:
-            self.env["ENGRAM_LLM_CONSOLIDATE"] = "1"
+            self.env["ALETHEA_LLM_CONSOLIDATE"] = "1"
         self.env.update(env or {})
         self.clock = clock or Clock()
-        self.engram = Engram(home=self.home, env=self.env, clock=self.clock)
-        self.server = Server(self.engram)
+        self.alethea = Alethea(home=self.home, env=self.env, clock=self.clock)
+        self.server = Server(self.alethea)
         assert self.server.acquire_instance()
         self.server.start()
-        self.cortex = self.engram.cortex
+        self.cortex = self.alethea.cortex
 
     def call(self, verb, params=None, timeout=5):
         return client.call(verb, params, timeout=timeout, env=self.env)
@@ -69,7 +69,7 @@ class Daemon:
 
     def sleep(self, **kw):
         """The idle sleep cycle as the timer runs it (api allowed)."""
-        return self.engram._run_sleep(api_ok=True, keep_sessions=(), **kw)
+        return self.alethea._run_sleep(api_ok=True, keep_sessions=(), **kw)
 
     def consolidate(self):
         return self.call("sleep", {"consolidate_only": True})

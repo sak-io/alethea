@@ -1,7 +1,7 @@
 """Unit tests for the similarity engine (R9, R10, R11)."""
 import unittest
 
-from engram import encode
+from alethea import encode
 
 
 class SimilarityTest(unittest.TestCase):

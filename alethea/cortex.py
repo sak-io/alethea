@@ -10,7 +10,7 @@ import time
 import uuid
 from pathlib import Path
 
-from engram.config import SCHEMA_VERSION, ensure_private_dir
+from alethea.config import SCHEMA_VERSION, ensure_private_dir
 
 KINDS = ("episodic", "semantic", "procedural", "identity")
 DECAY = {"episodic": 0.5, "semantic": 0.2, "procedural": 0.1, "identity": 0.0}
@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY, cwd TEXT, repo_root TEXT,
   started_at REAL NOT NULL, ended_at REAL, meta TEXT NOT NULL DEFAULT '{}'
 );
-CREATE TABLE IF NOT EXISTS engram_meta (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS alethea_meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
 _FTS = """
@@ -108,7 +108,7 @@ _COLS = ("id kind content gist keywords salience strength access_count created_a
 
 
 class SchemaVersionError(RuntimeError):
-    """The database was written by a newer Engram; refuse to open it."""
+    """The database was written by a newer Alethea; refuse to open it."""
 
 
 class Cortex:
@@ -131,8 +131,8 @@ class Cortex:
         if stored > SCHEMA_VERSION:
             self.db.close()
             raise SchemaVersionError(
-                "database %s has schema version %d, newer than this Engram supports (%d); "
-                "upgrade Engram or use a different ENGRAM_HOME" % (path, stored, SCHEMA_VERSION))
+                "database %s has schema version %d, newer than this Alethea supports (%d); "
+                "upgrade Alethea or use a different ALETHEA_HOME" % (path, stored, SCHEMA_VERSION))
         self.fts_available = True
         try:
             self.db.executescript(_FTS)
@@ -316,11 +316,11 @@ class Cortex:
 
     # meta
     def meta_get(self, key, default=None):
-        r = self.db.execute("SELECT value FROM engram_meta WHERE key=?", (key,)).fetchone()
+        r = self.db.execute("SELECT value FROM alethea_meta WHERE key=?", (key,)).fetchone()
         return r["value"] if r else default
 
     def meta_set(self, key, value):
-        self.db.execute("INSERT INTO engram_meta (key,value) VALUES (?,?) "
+        self.db.execute("INSERT INTO alethea_meta (key,value) VALUES (?,?) "
                         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                         (key, str(value)))
         self.db.commit()

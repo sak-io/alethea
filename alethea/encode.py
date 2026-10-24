@@ -4,9 +4,9 @@ gate and observe() (R13, R14), T§5. Every ingestion point redacts first (G16).
 import os
 import re
 
-from engram import markers, vectorize
-from engram.redact import redact
-from engram.vectorize import cosine, jaccard  # noqa: F401  (module-level so tests can stub)
+from alethea import markers, vectorize
+from alethea.redact import redact
+from alethea.vectorize import cosine, jaccard  # noqa: F401  (module-level so tests can stub)
 
 NEAR_DUPLICATE = 0.88
 ENCODE_THRESHOLD = 0.34
@@ -19,7 +19,7 @@ GIST_CHARS = 200
 # out of the SessionStart briefing and the exported rules until reinforced (access_count >= 2).
 UNTRUSTED_SOURCES = ("llm-host", "llm-api")
 PROMOTE_MIN_ACCESS = 2
-# Per-turn input cap in bytes (env ENGRAM_MAX_TURN_BYTES), applied before redact/journal.
+# Per-turn input cap in bytes (env ALETHEA_MAX_TURN_BYTES), applied before redact/journal.
 MAX_TURN_BYTES = 256 * 1024
 # Dedup looks for neighbours in the FTS channel among the newest DEDUP_FTS_WINDOW rows only
 # (plus the 600-row vector window), so the per-write cost is bounded instead of O(corpus).
@@ -242,7 +242,7 @@ def novelty(text, candidates=None, embedder=None):
     when None, recall.candidates is imported here (deferred, ADR 0002).
     """
     if candidates is None:
-        from engram import recall  # deferred: recall imports encode
+        from alethea import recall  # deferred: recall imports encode
         candidates = recall.candidates
     items = candidates(text) if callable(candidates) else candidates
     text = (text or "")[:markers.MAX_CHARS]
@@ -272,10 +272,10 @@ _TRIVIAL = re.compile(
 
 def dedup_fts_window():
     """Rows (newest first, by rowid) the dedup FTS channel may look at. Default
-    DEDUP_FTS_WINDOW; env ENGRAM_DEDUP_FTS_WINDOW overrides (set very large to test whether
+    DEDUP_FTS_WINDOW; env ALETHEA_DEDUP_FTS_WINDOW overrides (set very large to test whether
     a suspected missed duplicate is caused by this cap). See docs/adr/0008-dedup-fts-window-cap.md."""
     try:
-        return max(1, int(os.environ.get("ENGRAM_DEDUP_FTS_WINDOW", DEDUP_FTS_WINDOW)))
+        return max(1, int(os.environ.get("ALETHEA_DEDUP_FTS_WINDOW", DEDUP_FTS_WINDOW)))
     except ValueError:
         return DEDUP_FTS_WINDOW
 
@@ -301,7 +301,7 @@ def dedup_cap_state(cortex):
 
 def max_turn_bytes():
     try:
-        return max(1024, int(os.environ.get("ENGRAM_MAX_TURN_BYTES", MAX_TURN_BYTES)))
+        return max(1024, int(os.environ.get("ALETHEA_MAX_TURN_BYTES", MAX_TURN_BYTES)))
     except ValueError:
         return MAX_TURN_BYTES
 
@@ -355,7 +355,7 @@ def _best_duplicate(cortex, content, embedder_id, vec=None):
     """(best_similarity, memory) over same-embedder recall candidates. `vec` is the vector of
     `content` under `embedder_id` (computed by the caller before any lock). For a loaded
     optional embedder the candidates' STORED vectors are compared with it; no embedder call."""
-    from engram import recall  # deferred: recall imports encode (ADR 0002)
+    from alethea import recall  # deferred: recall imports encode (ADR 0002)
     best, best_m, best_i = 0.0, None, -1
     pool = []
     dense = vec is not None and vectorize.is_loaded_id(embedder_id)

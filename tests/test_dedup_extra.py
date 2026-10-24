@@ -1,9 +1,9 @@
 """Order-swap and case-only identifier pairs end to end (ADR 0007)."""
 import unittest
 
-from engram import encode as enc
-from engram import vectorize
-from engram.cortex import Cortex
+from alethea import encode as enc
+from alethea import vectorize
+from alethea.cortex import Cortex
 from tests.data.dedup_pairs_extra import LONG_PAIRS_EXTRA, SHORT_PAIRS
 
 

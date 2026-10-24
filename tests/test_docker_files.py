@@ -54,8 +54,8 @@ class ComposeTest(unittest.TestCase):
         self.assertEqual(len(re.findall(r"(?m)^\s+ports:", COMPOSE)), 1)
 
     def test_token_is_required_and_has_no_default(self):
-        tok = compose_env()["ENGRAM_TOKEN"]
-        self.assertRegex(tok, r"^\$\{ENGRAM_TOKEN:\?.+\}$")  # compose fails when unset/empty
+        tok = compose_env()["ALETHEA_TOKEN"]
+        self.assertRegex(tok, r"^\$\{ALETHEA_TOKEN:\?.+\}$")  # compose fails when unset/empty
         self.assertNotIn(":-", tok)  # no default value
 
     def test_no_literal_secret_in_compose(self):
@@ -65,23 +65,23 @@ class ComposeTest(unittest.TestCase):
 
     def test_container_mode_environment(self):
         env = compose_env()
-        self.assertEqual(env["ENGRAM_CONTAINER"], "1")
-        self.assertEqual(env["ENGRAM_BIND"].split()[0], "0.0.0.0")
-        self.assertEqual(env["ENGRAM_HOME"], "/data")
-        self.assertTrue(env["ENGRAM_PORT"].isdigit())
+        self.assertEqual(env["ALETHEA_CONTAINER"], "1")
+        self.assertEqual(env["ALETHEA_BIND"].split()[0], "0.0.0.0")
+        self.assertEqual(env["ALETHEA_HOME"], "/data")
+        self.assertTrue(env["ALETHEA_PORT"].isdigit())
 
     def test_restart_policy_volume_and_hardening(self):
         self.assertRegex(COMPOSE, r"(?m)^    restart: (unless-stopped|always|on-failure)")
-        self.assertRegex(COMPOSE, r"(?m)^      - engram-data:/data$")
-        self.assertRegex(COMPOSE, r"(?m)^  engram-data:")
+        self.assertRegex(COMPOSE, r"(?m)^      - alethea-data:/data$")
+        self.assertRegex(COMPOSE, r"(?m)^  alethea-data:")
         self.assertIn("no-new-privileges:true", COMPOSE)
         self.assertRegex(COMPOSE, r"cap_drop: \[ALL\]")
         self.assertNotRegex(COMPOSE, r"(?m)^\s+privileged:\s*true")
         self.assertNotRegex(COMPOSE, r"network_mode:\s*host")
 
     def test_container_port_matches_dockerfile(self):
-        port = compose_env()["ENGRAM_PORT"]
-        self.assertIn("ENGRAM_PORT=" + port, DOCKERFILE)
+        port = compose_env()["ALETHEA_PORT"]
+        self.assertIn("ALETHEA_PORT=" + port, DOCKERFILE)
         self.assertIn(":%s\"" % port, COMPOSE)
 
 
@@ -96,7 +96,7 @@ class DockerfileTest(unittest.TestCase):
         lines = code_lines(DOCKERFILE)
         for ln in lines:
             if re.match(r"(ENV|ARG)\b", ln):
-                self.assertNotRegex(ln, r"ENGRAM_TOKEN", ln)
+                self.assertNotRegex(ln, r"ALETHEA_TOKEN", ln)
             self.assertFalse(re.match(r"ADD\b", ln), "use COPY, not ADD: %r" % ln)
             self.assertNotRegex(ln, r"(?i)^COPY.*(\.env|token|\.pem|\.key)", ln)
             self.assertNotRegex(ln, r"^COPY\s+(--\S+\s+)*\.\s")  # no whole-context copy
@@ -109,8 +109,8 @@ class DockerfileTest(unittest.TestCase):
     def test_healthcheck_volume_and_command(self):
         self.assertRegex(DOCKERFILE, r"(?m)^HEALTHCHECK .*\\\n\s+CMD .*mnemo.*status")
         self.assertRegex(DOCKERFILE, r'(?m)^VOLUME \["/data"\]')
-        self.assertIn("ENGRAM_CONTAINER=1", DOCKERFILE)
-        self.assertRegex(DOCKERFILE, r'(?m)^CMD \["python3", "-m", "engram\.daemon"\]')
+        self.assertIn("ALETHEA_CONTAINER=1", DOCKERFILE)
+        self.assertRegex(DOCKERFILE, r'(?m)^CMD \["python3", "-m", "alethea\.daemon"\]')
 
     def test_copied_paths_exist_and_are_not_ignored(self):
         srcs = re.findall(r"(?m)^COPY\s+(?:--\S+\s+)*(\S+)\s+\S+$", DOCKERFILE)
@@ -122,7 +122,7 @@ class DockerfileTest(unittest.TestCase):
 
 class DockerignoreTest(unittest.TestCase):
     def test_excludes_sensitive_and_bulky_paths(self):
-        for needed in (".git", ".env", "tests", "*.db", ".engram", "token", "*.pem", "*.key"):
+        for needed in (".git", ".env", "tests", "*.db", ".alethea", "token", "*.pem", "*.key"):
             self.assertIn(needed, IGNORE)
 
 
@@ -133,17 +133,17 @@ class ContainerModeProcessTest(unittest.TestCase):
     TOKEN = "t28-token-" + "x" * 24
 
     def start(self, token):
-        env = {k: v for k, v in os.environ.items() if not k.startswith("ENGRAM_")}
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ALETHEA_")}
         s = socket.socket()
         s.bind(("127.0.0.1", 0))
         self.port = s.getsockname()[1]
         s.close()
-        env.update(ENGRAM_CONTAINER=compose_env()["ENGRAM_CONTAINER"], ENGRAM_BIND="127.0.0.1",
-                   ENGRAM_PORT=str(self.port), ENGRAM_HOME=make_home())
+        env.update(ALETHEA_CONTAINER=compose_env()["ALETHEA_CONTAINER"], ALETHEA_BIND="127.0.0.1",
+                   ALETHEA_PORT=str(self.port), ALETHEA_HOME=make_home())
         if token:
-            env["ENGRAM_TOKEN"] = token
+            env["ALETHEA_TOKEN"] = token
         self.env = env
-        return subprocess.Popen([sys.executable, "-m", "engram.daemon"], cwd=ROOT, env=env,
+        return subprocess.Popen([sys.executable, "-m", "alethea.daemon"], cwd=ROOT, env=env,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     def call(self, req):
@@ -188,7 +188,7 @@ class ContainerModeProcessTest(unittest.TestCase):
         cli = self.mnemo_status(self.env)  # exactly what the HEALTHCHECK runs
         self.assertEqual(cli.returncode, 0, cli.stderr)
         self.assertNotIn(self.TOKEN, cli.stdout + cli.stderr)
-        self.assertNotEqual(self.mnemo_status(dict(self.env, ENGRAM_TOKEN="w" * 24)).returncode, 0)
+        self.assertNotEqual(self.mnemo_status(dict(self.env, ALETHEA_TOKEN="w" * 24)).returncode, 0)
 
 
 if __name__ == "__main__":

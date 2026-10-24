@@ -4,7 +4,7 @@ ADR 0003: decay acts on strength, ages are in days, per-kind DOWNSCALE_RATE.
 ADR 0005: the optional `lock` (context manager) is taken per batch, never for a run.
 Fairness: releasing and immediately re-acquiring a plain (unfair) RLock starves other
 threads, so callers that share the lock with request threads must pass a
-`engram.fairlock.FairLock` (FIFO handoff).
+`alethea.fairlock.FairLock` (FIFO handoff).
 All time comes from the injectable clock (`now` argument or `cortex.clock`).
 """
 import contextlib
@@ -13,9 +13,9 @@ import json
 import math
 import time
 
-from engram import encode, vectorize
-from engram.config import DOWNSCALE_INTERVAL_S
-from engram.cortex import (ARCHIVE_ACTIVATION, DAY_S, DOWNSCALE_FACTOR,
+from alethea import encode, vectorize
+from alethea.config import DOWNSCALE_INTERVAL_S
+from alethea.cortex import (ARCHIVE_ACTIVATION, DAY_S, DOWNSCALE_FACTOR,
                            DOWNSCALE_RATE, MIN_STRENGTH)
 
 MAX_PERIOD_DAYS = 14.0
@@ -460,7 +460,7 @@ def _chunks(ep):
 
 def _meta_del(cortex, *keys):
     for k in keys:
-        cortex.db.execute("DELETE FROM engram_meta WHERE key=?", (k,))
+        cortex.db.execute("DELETE FROM alethea_meta WHERE key=?", (k,))
     cortex.db.commit()
 
 
@@ -470,13 +470,13 @@ def consolidate_episodes(cortex, distiller=None, lock=None, limit=None, should_s
 
     Everything goes through encode() (redaction, dedup vetoes, thresholds). Journal rows
     are marked consolidated only after the episode (or 100-turn chunk) is written; a
-    failure leaves them pending for retry. Writes are checkpointed in engram_meta so a
+    failure leaves them pending for retry. Writes are checkpointed in alethea_meta so a
     retry does not re-reinforce finished steps, and after MAX_ATTEMPTS failures the
     episode is poisoned and skipped. `should_stop()` is polled between episodes (batches);
     when true the run ends cleanly with the rest still pending. Returns dict(episodes,
     skipped, summaries, facts, errors, poisoned, stopped).
 
-    `llm` (T27, only when ENGRAM_LLM_CONSOLIDATE is on; a `distill.Service`): an episode is
+    `llm` (T27, only when ALETHEA_LLM_CONSOLIDATE is on; a `distill.Service`): an episode is
     queued as pending instead of being written (key `queued` appears in the result) until the
     host/API distils it or its TTL passes; then it takes the normal extractive path below.
     """
@@ -629,7 +629,7 @@ def purge_journal(cortex, now=None, lock=None, keep_sessions=()):
                 # episode checkpoints are keyed by the episode's first journal id
                 for pre in ("consol_poison:", "consol_attempts:", "consol_progress:",
                             "llm_pending:", "llm_done:"):
-                    cortex.db.execute("DELETE FROM engram_meta WHERE key IN (%s)"
+                    cortex.db.execute("DELETE FROM alethea_meta WHERE key IN (%s)"
                                       % marks, [pre + str(i) for i in ids])
                 cortex.db.commit()
             out[key] += len(ids)
