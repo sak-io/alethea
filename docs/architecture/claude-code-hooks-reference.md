@@ -1,6 +1,6 @@
 # Claude Code integration reference (fetched 2026-10-21)
 
-Source: official Claude Code docs (code.claude.com: hooks reference, MCP, memory, Claude Code on the web), summarised by a research agent. Items marked **not documented** were not found in the pages it read. Several details are version-gated; re-check against the installed version before relying on them. This file is data for the T22/T23/T24 builders, not a spec of Engram behaviour.
+Source: official Claude Code docs (code.claude.com: hooks reference, MCP, memory, Claude Code on the web), summarised by a research agent. Items marked **not documented** were not found in the pages it read. Several details are version-gated; re-check against the installed version before relying on them. This file is data for the T22/T23/T24 builders, not a spec of Alethea behaviour.
 
 ## Hook configuration (`.claude/settings.json`)
 ```json
@@ -25,10 +25,10 @@ Common fields: `session_id`, `transcript_path`, `cwd`, `permission_mode`, `hook_
 Universal JSON output fields: `continue`, `stopReason`, `suppressOutput`, `systemMessage`.
 
 ## Exit codes
-0 = success (JSON applied; stdout added to context only for UserPromptSubmit and SessionStart). **2 = blocking error** on blocking events (stderr fed back). Any other non-zero = non-blocking error (transcript shows a hook error). A timeout cancels the hook and discards its output; a crash or missing script is non-blocking. By default a failing hook does **not** block the session (`onFailure: "block"` is opt-in, v2.1.295+). Engram hooks must always exit 0 and must never exit 2.
+0 = success (JSON applied; stdout added to context only for UserPromptSubmit and SessionStart). **2 = blocking error** on blocking events (stderr fed back). Any other non-zero = non-blocking error (transcript shows a hook error). A timeout cancels the hook and discards its output; a crash or missing script is non-blocking. By default a failing hook does **not** block the session (`onFailure: "block"` is opt-in, v2.1.295+). Alethea hooks must always exit 0 and must never exit 2.
 
 ## Transcript
-`transcript_path` is a JSONL conversation file; the line shape is **not documented** in what was read. Engram must not depend on it: use `last_assistant_message` from the Stop payload, and treat transcript reading as optional best effort (any parse error => ignore).
+`transcript_path` is a JSONL conversation file; the line shape is **not documented** in what was read. Alethea must not depend on it: use `last_assistant_message` from the Stop payload, and treat transcript reading as optional best effort (any parse error => ignore).
 
 ## MCP (`.mcp.json`, project scope)
 `{"mcpServers": {"<name>": {"command": "...", "args": [...], "env": {...}}}}` for stdio; `${VAR}` and `${VAR:-default}` expand in command, args, env. Interactive sessions ask for approval before using project-scoped servers (reset: `claude mcp reset-project-choices`); `-p`, Agent SDK and cloud sessions load them without asking.

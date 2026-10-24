@@ -1,19 +1,19 @@
 # API reference
 
-Three surfaces over one daemon: the wire protocol (daemon verbs), the MCP tools, and the `mnemo` CLI. All limits below are read from the code (`engram/daemon.py`, `engram/mcp_server.py`, `engram/cli.py`); the drift guard `tests/test_docs_api.py` fails if a daemon verb, MCP tool or `mnemo` subcommand is missing from this file. How the pieces fit: [architecture.md](architecture.md). Configuration: [configuration.md](configuration.md).
+Three surfaces over one daemon: the wire protocol (daemon verbs), the MCP tools, and the `mnemo` CLI. All limits below are read from the code (`alethea/daemon.py`, `alethea/mcp_server.py`, `alethea/cli.py`); the drift guard `tests/test_docs_api.py` fails if a daemon verb, MCP tool or `mnemo` subcommand is missing from this file. How the pieces fit: [architecture.md](architecture.md). Configuration: [configuration.md](configuration.md).
 
 ## 1. Wire protocol
 
 One JSON object per line (newline-delimited, UTF-8) in, one JSON line out. Request: `{"verb": "<name>", "token": "<tcp only>", ...params}`. Every reply has `"ok": true|false`; failures are `{"ok": false, "error": "<message>"}`. A connection may carry several requests in sequence.
 
-Transports (`engram/daemon.py: Server`):
+Transports (`alethea/daemon.py: Server`):
 
 | Transport | Address | Auth |
 |---|---|---|
-| Unix socket | `<ENGRAM_HOME>/engram.sock` (0600, directory 0700) | none (filesystem permissions) |
-| TCP (optional) | `127.0.0.1:<port>`, or `ENGRAM_BIND`; recorded in `<ENGRAM_HOME>/daemon.json` | every request must carry `"token"`; see [threat-model.md](threat-model.md) |
+| Unix socket | `<ALETHEA_HOME>/alethea.sock` (0600, directory 0700) | none (filesystem permissions) |
+| TCP (optional) | `127.0.0.1:<port>`, or `ALETHEA_BIND`; recorded in `<ALETHEA_HOME>/daemon.json` | every request must carry `"token"`; see [threat-model.md](threat-model.md) |
 
-Transport limits: request line max 1 MiB; first byte within 1.5 s, whole line within 5 s; at most 64 requests executing at once (`busy` otherwise); the client treats a reply over 8 MiB as a failure. The client library (`engram/client.py`) never raises: any failure becomes `{"ok": false, "offline": true}` (`offline` is added by the client, never sent by the daemon).
+Transport limits: request line max 1 MiB; first byte within 1.5 s, whole line within 5 s; at most 64 requests executing at once (`busy` otherwise); the client treats a reply over 8 MiB as a failure. The client library (`alethea/client.py`) never raises: any failure becomes `{"ok": false, "offline": true}` (`offline` is added by the client, never sent by the daemon).
 
 ### Transport-level errors (any verb)
 
@@ -53,16 +53,16 @@ Returned by `recall` and `dump`: `id, kind, content, gist, keywords, salience, s
 | `session_end` | `session_id` (required, max 256); `wait` (boolean, default false) | `{ok, scheduled: true}` (consolidation runs on a background thread) or, with `wait`, `{ok, consolidated: true}` | none |
 | `status` | none | `{ok, version, schema_version, embedder_id, embedder_configured, embedder_state, embedder_falling_back, embedder_reason, embedder_retry_in_s, embedder_fallbacks, embedder_dim, fts, counts, total, journal_pending, dedup, distiller, reembed, last_sleep, pid, uptime_s, sleep_interval_s, idle_sleep_s}`, plus `embedder_remote*` fields for `openai:`. Never loads a model or waits; not counted as activity. | none |
 | `dump` | `limit` (1..500, default 100); `offset` (0..1e9); `kind`; `status` (each max 32 chars) | `{ok, memories: [memory...], limit, offset}`; `content` is cut at 2000 chars | none |
-| `export_rules` | `repo_root` (required; absolute, no `..`) | `{ok, items, count}`: render-only, the daemon never writes a file | `parameter not accepted: <name>` for `path`, `target`, `dir` and similar (see `engram/export.py: FORBIDDEN_PARAMS`); `repo_root must be an absolute path without '..'` |
-| `pending` | `n` (1..5, default 3) | `{ok, episodes: [{id, session_id, start, end, turns, expires_in_s, text}], count, mode, max_bullets, max_bullet_chars}` | `LLM distillation is off (set ENGRAM_LLM_CONSOLIDATE=1)`; `distillation runs inside the daemon (api mode)` |
+| `export_rules` | `repo_root` (required; absolute, no `..`) | `{ok, items, count}`: render-only, the daemon never writes a file | `parameter not accepted: <name>` for `path`, `target`, `dir` and similar (see `alethea/export.py: FORBIDDEN_PARAMS`); `repo_root must be an absolute path without '..'` |
+| `pending` | `n` (1..5, default 3) | `{ok, episodes: [{id, session_id, start, end, turns, expires_in_s, text}], count, mode, max_bullets, max_bullet_chars}` | `LLM distillation is off (set ALETHEA_LLM_CONSOLIDATE=1)`; `distillation runs inside the daemon (api mode)` |
 | `distill_submit` | `episode_id` (required, max 32); `bullets` (list of strings) | `{ok, accepted, created, merged, consolidated, rejected?, replayed?}` | the two errors of `pending`; whole-request validation messages (`bullets must be a list of strings`, `too many bullets (max 6)`, `bullet N too long (max 300 chars)`, `bullet N must be a non-empty string`, ...); `episode_id must be an id returned by pending`; `unknown, expired or already consolidated episode`; `episode was not listed by pending`; `rate limit reached; try again later` |
 | `reembed` | `action` (required): `plan`, `start`, `status`, `cancel`. For `start`: `confirm` (boolean), `batch` (1..64, default 32), `include_identity` (boolean) | `plan`: `{ok, action, target, ready, reason, remote, host, model, memories, chars, identity_excluded, needs_confirm, item_char_cap, with_identity}`; `start`/`status`/`cancel`: `{ok, action, reembed: {state, target, done, total, cursor, rate_per_s, eta_s, last_error, include_identity, batch, failures, active}}` | `action must be one of: plan, start, status, cancel`; `embedder not ready: <reason>`; `confirmation required: memory text would be sent to <host>`; `a reembed run is already in progress` |
 
-Activity bookkeeping: every verb except `ping`, `status`, `export_rules` and `reembed` with action `status` or `plan` resets the idle timer and marks "something happened since the last sleep" (the automatic sleep cycle only runs after `ENGRAM_IDLE_SLEEP` seconds of inactivity, at least `ENGRAM_SLEEP_INTERVAL` apart, and only if there was activity).
+Activity bookkeeping: every verb except `ping`, `status`, `export_rules` and `reembed` with action `status` or `plan` resets the idle timer and marks "something happened since the last sleep" (the automatic sleep cycle only runs after `ALETHEA_IDLE_SLEEP` seconds of inactivity, at least `ALETHEA_SLEEP_INTERVAL` apart, and only if there was activity).
 
 ## 2. MCP server
 
-`python -I -m engram.mcp_server` (entry point `engram-mcp`): stdio, JSON-RPC 2.0, one message per line, no SDK. Protocol versions `2025-06-18`, `2025-03-26`, `2024-11-05` (the client's version is echoed if known, else `2025-06-18`). Methods: `initialize`, `ping`, `tools/list`, `tools/call`, `shutdown`; the `exit` notification stops it. It does not start the daemon.
+`python -I -m alethea.mcp_server` (entry point `alethea-mcp`): stdio, JSON-RPC 2.0, one message per line, no SDK. Protocol versions `2025-06-18`, `2025-03-26`, `2024-11-05` (the client's version is echoed if known, else `2025-06-18`). Methods: `initialize`, `ping`, `tools/list`, `tools/call`, `shutdown`; the `exit` notification stops it. It does not start the daemon.
 
 Result semantics (the session must never break):
 
@@ -81,9 +81,9 @@ All tools also accept optional `cwd` (string, max 4096) and `session_id` (string
 | `remember` | `content` (1..20000, required); `kind`; `salience` (0..1) | daemon `remember`; text `created (id ...)`, `reinforced (id ...)` or `not stored (<reason>)` |
 | `reflect` | `content` (1..20000, required); `cited_ids` (at most 50 strings, each max 128) | daemon `reflect`; same text forms |
 | `forget` | `id` (required) | `forgotten` or `no such memory` |
-| `engram_status` | none | one line: `memory online total=N pending=N embedder=...` plus embedder/distiller state when not default |
-| `engram_consolidate_pending` | `n` (1..5) | listed only when `ENGRAM_LLM_CONSOLIDATE` is on; queues the journal, then returns episodes (as data) with instructions for the host model to write notes |
-| `engram_distill_submit` | `episode_id` (required, max 18), `bullets` (at most 6 strings, each max 300) | listed only when `ENGRAM_LLM_CONSOLIDATE` is on; `isError: true` with `not accepted: <reason>` when the daemon refuses |
+| `alethea_status` | none | one line: `memory online total=N pending=N embedder=...` plus embedder/distiller state when not default |
+| `alethea_consolidate_pending` | `n` (1..5) | listed only when `ALETHEA_LLM_CONSOLIDATE` is on; queues the journal, then returns episodes (as data) with instructions for the host model to write notes |
+| `alethea_distill_submit` | `episode_id` (required, max 18), `bullets` (at most 6 strings, each max 300) | listed only when `ALETHEA_LLM_CONSOLIDATE` is on; `isError: true` with `not accepted: <reason>` when the daemon refuses |
 
 There is no briefing tool: the briefing is injected by the Claude Code SessionStart hook only.
 
@@ -106,17 +106,17 @@ There is no briefing tool: the briefing is injected by the Claude Code SessionSt
 | Command | Does | Notes |
 |---|---|---|
 | `status` | daemon pid/uptime, embedder, dedup window, last sleep, counts, re-embed and distiller state | offline: `daemon: down`, exit 0 (3 strict) |
-| `up [--timeout S]` | start the daemon if needed (default wait 5 s) | not available in TCP/container mode (`ENGRAM_PORT`/`ENGRAM_CONTAINER`): "daemon did not come up", exit 0 (3 strict) |
+| `up [--timeout S]` | start the daemon if needed (default wait 5 s) | not available in TCP/container mode (`ALETHEA_PORT`/`ALETHEA_CONTAINER`): "daemon did not come up", exit 0 (3 strict) |
 | `remember CONTENT [--kind K] [--salience 0..1]` | store; prints the memory id | max 200000 chars |
 | `recall CUE [-k N] [--scope all\|repo] [--no-reinforce]` | one line per hit: `id  [kind]  gist` | max 4096 chars |
 | `forget ID` | suppress a memory; refreshes existing export files | exit 1 with `not found` |
 | `dump [--kind K] [--status S] [--limit N] [--offset N]` | list memories | |
 | `sleep [--quick]` | run a consolidation cycle now (`--quick`: no downscale/recombine) | refreshes existing export files |
-| `export-rules [--target all\|claude\|cursor] [--if-changed]` | write `.claude/engram_learned.md` and `.cursor/rules/engram_learned.mdc` for the current repo | whole files owned by Engram; refused targets and failures exit 0 (1 strict); offline exit 0 (3 strict) |
-| `install claude-code [--scope user\|local\|project] [--dry-run] [--status] [--mcp]` | merge Engram's five hooks into Claude Code `settings.json`; `--mcp` also runs `claude mcp add` | `--status` lists scopes; exit 1 if `--mcp` registration fails |
-| `uninstall claude-code [--scope ...] [--dry-run]` | remove only Engram's hook entries | |
+| `export-rules [--target all\|claude\|cursor] [--if-changed]` | write `.claude/alethea_learned.md` and `.cursor/rules/alethea_learned.mdc` for the current repo | whole files owned by Alethea; refused targets and failures exit 0 (1 strict); offline exit 0 (3 strict) |
+| `install claude-code [--scope user\|local\|project] [--dry-run] [--status] [--mcp]` | merge Alethea's five hooks into Claude Code `settings.json`; `--mcp` also runs `claude mcp add` | `--status` lists scopes; exit 1 if `--mcp` registration fails |
+| `uninstall claude-code [--scope ...] [--dry-run]` | remove only Alethea's hook entries | |
 | `install cursor [--scope user\|project] [--dry-run] [--status]` | register the MCP server in `mcp.json` (+ rule file with `--scope project`) | no hooks |
-| `uninstall cursor [--scope ...] [--dry-run]` | remove only what Engram wrote | |
+| `uninstall cursor [--scope ...] [--dry-run]` | remove only what Alethea wrote | |
 | `install --print mcp [--format json\|toml]` | print an MCP-only snippet for Codex, Gemini CLI, Grok and others; writes nothing | the host-specific note goes to stderr |
 | `reembed [--dry-run] [--yes] [--status] [--cancel] [--batch N] [--include-identity]` | re-embed stored vectors under the configured embedder | only a remote target (`openai:`) needs `--yes`; `--dry-run`, `--status`, `--cancel` and `--yes` are mutually exclusive (exit 2) |
 
@@ -124,6 +124,6 @@ There is no briefing tool: the briefing is injected by the Claude Code SessionSt
 
 | Command | Purpose |
 |---|---|
-| `engram-daemon` | the daemon in the foreground. Exit 0 also when another daemon already owns the lock; 2 on refused configuration (token too short, missing token on non-loopback/container bind, bad port) or unsupported platform; 1 on other start failures. |
-| `engram-hook` | Claude Code hook: JSON on stdin, event from `hook_event_name`. Always exits 0; stdout is empty or one JSON object (SessionStart `additionalContext`); 2 s watchdog. |
-| `engram-mcp` | the MCP server above. |
+| `alethea-daemon` | the daemon in the foreground. Exit 0 also when another daemon already owns the lock; 2 on refused configuration (token too short, missing token on non-loopback/container bind, bad port) or unsupported platform; 1 on other start failures. |
+| `alethea-hook` | Claude Code hook: JSON on stdin, event from `hook_event_name`. Always exits 0; stdout is empty or one JSON object (SessionStart `additionalContext`); 2 s watchdog. |
+| `alethea-mcp` | the MCP server above. |

@@ -1,9 +1,9 @@
-# Using Engram from Claude Code
+# Using Alethea from Claude Code
 
-Engram ships its Claude Code hooks with the installed package. Install the package, then run the installer once:
+Alethea ships its Claude Code hooks with the installed package. Install the package, then run the installer once:
 
 ```
-pipx install engram-memory      # PyPI name still to be confirmed; until then:
+pipx install alethea      # once published to PyPI; until then:
 pipx install git+https://github.com/sak-io/engram   # once this work is merged to main
 mnemo install claude-code
 ```
@@ -14,7 +14,7 @@ This repository's own `.claude/settings.json` contains permissions only, no `hoo
 
 ## 1. Install the hooks: `mnemo install claude-code`
 
-It merges one `hooks` block into a Claude Code settings file. It never replaces the file: every other key, permission and hook (and their order) is kept. Entries it owns are recognised by their args (`-I -m engram.hooks.engram_hook`, plus the two older forms: `-m` without `-I`, and the T23 script path) and updated in place, so running it again reports `unchanged` and writes nothing.
+It merges one `hooks` block into a Claude Code settings file. It never replaces the file: every other key, permission and hook (and their order) is kept. Entries it owns are recognised by their args (`-I -m alethea.hooks.alethea_hook`, plus the two older forms: `-m` without `-I`, and the T23 script path) and updated in place, so running it again reports `unchanged` and writes nothing.
 
 | `--scope` | File | Notes |
 |---|---|---|
@@ -22,28 +22,28 @@ It merges one `hooks` block into a Claude Code settings file. It never replaces 
 | `local` | `<git root>/.claude/settings.local.json` | this repo only, not committed |
 | `project` | `<git root>/.claude/settings.json` | committed: it would capture EVERY contributor's sessions; the installer warns |
 
-Options: `--dry-run` prints a unified diff and writes nothing; `--mcp` also runs `claude mcp add --scope <scope> engram -- <python> -I -m engram.mcp_server` when a `claude` binary is on PATH (otherwise it prints that command); `--status` shows where hooks are installed.
+Options: `--dry-run` prints a unified diff and writes nothing; `--mcp` also runs `claude mcp add --scope <scope> alethea -- <python> -I -m alethea.mcp_server` when a `claude` binary is on PATH (otherwise it prints that command); `--status` shows where hooks are installed.
 
-Safety: invalid JSON, or a `hooks` that is not an object, is refused with exit code 2 and the file untouched. Writes are atomic (temp file, fsync, rename), keep the file mode and refuse a symlinked file or settings directory (if `~/.claude` is a symlink, point `CLAUDE_CONFIG_DIR` at the real directory). The first change to an existing file keeps `settings.json.engram-backup` next to it. The installer touches nothing outside the chosen file.
+Safety: invalid JSON, or a `hooks` that is not an object, is refused with exit code 2 and the file untouched. Writes are atomic (temp file, fsync, rename), keep the file mode and refuse a symlinked file or settings directory (if `~/.claude` is a symlink, point `CLAUDE_CONFIG_DIR` at the real directory). The first change to an existing file keeps `settings.json.alethea-backup` next to it. The installer touches nothing outside the chosen file.
 
-`-I` (isolated mode) is deliberate: plain `python -m` puts the current directory first on `sys.path`, so a project containing a fake `engram/` package would run its code in every session there. The same applies to the MCP command, and the daemon the hooks autostart is launched with `-I` from the directory of the `engram` package the client imported, with the Engram home as its working directory.
+`-I` (isolated mode) is deliberate: plain `python -m` puts the current directory first on `sys.path`, so a project containing a fake `alethea/` package would run its code in every session there. The same applies to the MCP command, and the daemon the hooks autostart is launched with `-I` from the directory of the `alethea` package the client imported, with the Alethea home as its working directory.
 
-The hooks run `<python> -I -m engram.hooks.engram_hook` with `<python>` = the interpreter that has Engram installed (no PATH lookup; reinstall after moving or recreating the environment). Timeouts: 5 s, `SessionEnd` 3 s (the hook has its own 2 s deadline; Claude Code's 1.5 s default for `SessionEnd` would cancel it). The hook always exits 0 and never blocks a prompt, a stop or a compaction.
+The hooks run `<python> -I -m alethea.hooks.alethea_hook` with `<python>` = the interpreter that has Alethea installed (no PATH lookup; reinstall after moving or recreating the environment). Timeouts: 5 s, `SessionEnd` 3 s (the hook has its own 2 s deadline; Claude Code's 1.5 s default for `SessionEnd` would cancel it). The hook always exits 0 and never blocks a prompt, a stop or a compaction.
 
 What each event does: SessionStart prints a short briefing of relevant memories into context; UserPromptSubmit and Stop journal the prompt and Claude's final reply (printing nothing); SessionEnd asks the daemon to consolidate in the background; PreCompact triggers a light sleep cycle.
 
-Alternative, manual: merge the block in `settings.hooks.json` (generated from the installer; replace `/ABSOLUTE/PATH/TO/python` with the interpreter that has Engram installed) into the settings file yourself.
+Alternative, manual: merge the block in `settings.hooks.json` (generated from the installer; replace `/ABSOLUTE/PATH/TO/python` with the interpreter that has Alethea installed) into the settings file yourself.
 
 ## 2. MCP server (the `recall` / `remember` tools)
 
-`mnemo install claude-code --mcp` registers it. Manually: `claude mcp add --scope user engram -- <python> -I -m engram.mcp_server`, or in a project `.mcp.json`:
+`mnemo install claude-code --mcp` registers it. Manually: `claude mcp add --scope user alethea -- <python> -I -m alethea.mcp_server`, or in a project `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
-    "engram": {
+    "alethea": {
       "command": "/ABSOLUTE/PATH/TO/python",
-      "args": ["-I", "-m", "engram.mcp_server"],
+      "args": ["-I", "-m", "alethea.mcp_server"],
       "env": {}
     }
   }
@@ -54,25 +54,25 @@ Interactive sessions ask you to approve a project-scoped MCP server on first use
 
 ## 3. Tell the agent when to use it
 
-Copy the sentence from `CLAUDE.snippet.md` into the project's CLAUDE.md. That file also shows an optional `@.claude/engram_learned.md` import; the file it names is generated by `mnemo export-rules` (task T24) and may not exist until you have run it once.
+Copy the sentence from `CLAUDE.snippet.md` into the project's CLAUDE.md. That file also shows an optional `@.claude/alethea_learned.md` import; the file it names is generated by `mnemo export-rules` (task T24) and may not exist until you have run it once.
 
 ## 4. Verify
 
-Run `mnemo status`: it shows whether the daemon is up, the memory counts and `journal pending`. Start a Claude Code session, send a prompt, run it again: the counts should have moved. If the daemon is down, hooks and tools degrade silently (hooks print nothing and exit 0; the MCP tools answer "memory offline"). Set `ENGRAM_HOOK_DEBUG=1` for a one-line diagnostic on stderr.
+Run `mnemo status`: it shows whether the daemon is up, the memory counts and `journal pending`. Start a Claude Code session, send a prompt, run it again: the counts should have moved. If the daemon is down, hooks and tools degrade silently (hooks print nothing and exit 0; the MCP tools answer "memory offline"). Set `ALETHEA_HOOK_DEBUG=1` for a one-line diagnostic on stderr.
 
 ## 5. Disable, upgrade, uninstall
 
-- Disable capture: `mnemo uninstall claude-code [--scope ...]` removes only Engram's entries: the event arrays and the `hooks` key are dropped only when they end up empty because of that. If the file then holds just `{}` and no `.engram-backup` exists (the installer created it), the file is deleted, and its directory too if it is then empty (the installer cannot tell who created an empty directory, so it only ever removes one that is empty); otherwise the file stays. `ENGRAM_PORT=1` stops daemon autostart without editing files. `claude mcp remove engram` removes the MCP registration.
-- Upgrade: `pipx upgrade engram-memory` (or reinstall from git), then `mnemo install claude-code` again if the interpreter path changed.
-- Remove the package: `mnemo uninstall claude-code` first, then `pipx uninstall engram-memory`. To erase data, delete the Engram home directory (below).
+- Disable capture: `mnemo uninstall claude-code [--scope ...]` removes only Alethea's entries: the event arrays and the `hooks` key are dropped only when they end up empty because of that. If the file then holds just `{}` and no `.alethea-backup` exists (the installer created it), the file is deleted, and its directory too if it is then empty (the installer cannot tell who created an empty directory, so it only ever removes one that is empty); otherwise the file stays. `ALETHEA_PORT=1` stops daemon autostart without editing files. `claude mcp remove alethea` removes the MCP registration.
+- Upgrade: `pipx upgrade alethea` (or reinstall from git), then `mnemo install claude-code` again if the interpreter path changed.
+- Remove the package: `mnemo uninstall claude-code` first, then `pipx uninstall alethea`. To erase data, delete the Alethea home directory (below).
 
 ## Privacy
 
-- Journaled: your prompts and Claude's final replies for each turn, per session, and the memories distilled from them. Everything stays on your machine; Engram makes no network calls and uses no embedding API.
+- Journaled: your prompts and Claude's final replies for each turn, per session, and the memories distilled from them. Everything stays on your machine; Alethea makes no network calls and uses no embedding API.
 - Redaction: secrets matching known patterns (API keys, tokens, private keys, credential URLs) are masked before storage. This is best effort, not a guarantee; see the known gaps in `docs/architecture/lessons.md`. Do not rely on it for material you must never store.
-- Location: `~/.engram` (SQLite store, socket, daemon state), or the directory in `ENGRAM_HOME` if set. Memories are scoped by repository root; branch is not part of the scope.
+- Location: `~/.alethea` (SQLite store, socket, daemon state), or the directory in `ALETHEA_HOME` if set. Memories are scoped by repository root; branch is not part of the scope.
 - The first hook run may start the local daemon in the background.
 
 ## Cloud sessions
 
-Per the Claude Code docs, SessionStart hooks run in cloud sessions and user/project settings are read there, and project `.mcp.json` servers load without a prompt. The docs read for this integration do not state whether the other hook events run there; verify before relying on it. The cloud machine is ephemeral: daemon state and `~/.engram` (or `ENGRAM_HOME`) vanish when the session ends, so memories do not carry over unless you point `ENGRAM_HOME` at persistent storage. A user-scope install also needs the package installed in that environment.
+Per the Claude Code docs, SessionStart hooks run in cloud sessions and user/project settings are read there, and project `.mcp.json` servers load without a prompt. The docs read for this integration do not state whether the other hook events run there; verify before relying on it. The cloud machine is ephemeral: daemon state and `~/.alethea` (or `ALETHEA_HOME`) vanish when the session ends, so memories do not carry over unless you point `ALETHEA_HOME` at persistent storage. A user-scope install also needs the package installed in that environment.

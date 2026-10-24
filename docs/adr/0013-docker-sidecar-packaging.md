@@ -5,8 +5,8 @@ Status: Accepted (developer decision, T28; for reviewer and owner confirmation) 
 **Context.** ADR 0004 fixed the policy (container mode, token mandatory, loopback publish). T28 had to choose how the image is built and how the secret reaches it.
 
 **Decision.**
-- The token comes only from the `ENGRAM_TOKEN` environment variable via compose `${ENGRAM_TOKEN:?...}`: compose fails when it is unset, and there is no default. It is never an `ENV`/`ARG` in the Dockerfile and never in the build context (`.env`, `token`, keys are in `.dockerignore`).
-- The image copies only `engram/` and `scripts/mnemo` (no `pip install`, no project metadata, `PYTHONPATH=/app`), so there is nothing to resolve or download at build time. The entry point is `python3 -m engram.daemon`; the health check is `mnemo status --strict` (authenticated, so a wrong token makes the container unhealthy).
+- The token comes only from the `ALETHEA_TOKEN` environment variable via compose `${ALETHEA_TOKEN:?...}`: compose fails when it is unset, and there is no default. It is never an `ENV`/`ARG` in the Dockerfile and never in the build context (`.env`, `token`, keys are in `.dockerignore`).
+- The image copies only `alethea/` and `scripts/mnemo` (no `pip install`, no project metadata, `PYTHONPATH=/app`), so there is nothing to resolve or download at build time. The entry point is `python3 -m alethea.daemon`; the health check is `mnemo status --strict` (authenticated, so a wrong token makes the container unhealthy).
 - Runs as uid 10001 with `/data` pre-created 0700, read-only root fs, `cap_drop: ALL`, `no-new-privileges`.
 - Base image `python:3.13-slim` by tag (the code supports 3.9+); not digest-pinned.
 
