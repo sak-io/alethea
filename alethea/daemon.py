@@ -28,7 +28,7 @@ except ImportError:
 
 from alethea import (__version__, consolidate, encode, export, gitctx, recall, reembed,
                     vectorize)
-from alethea.config import (MAX_REQUEST_BYTES, ensure_private_dir, home_dir, legacy_home_hint,
+from alethea.config import (MAX_REQUEST_BYTES, ensure_private_dir, home_dir,
                            llm_mode, load_config)
 from alethea.cortex import Cortex
 from alethea.fairlock import FairLock
@@ -976,9 +976,6 @@ def main(argv=None):
     if not SUPPORTED:
         sys.stderr.write("alethea: %s\n" % UNSUPPORTED_MSG)
         return 2
-    hint = legacy_home_hint()
-    if hint:
-        sys.stderr.write("alethea: %s\n" % hint)
     server = Server(None, home=home_dir())
     try:
         if not server.acquire_instance():

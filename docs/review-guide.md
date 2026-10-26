@@ -1,6 +1,6 @@
 # Reviewer's guide (Phases 1-3 and the Alethea rename)
 
-The sections below describe the whole system (Phases 1 and 2 were merged earlier in PR #1). The PR that merges Phase 3 plus the Engram-to-Alethea rename is about 130 files and 12,000 added lines, much of it renamed files, tests and docs; the sizes in section 1 describe the whole tree. **The product code is 20 files and about 5,600 lines.** This guide tells you what to read, what to skip, which properties matter most, where each is enforced and tested, how to try to break them, and what has *not* been verified. Line numbers refer to the head of `autocraft/kickoff` when this guide was written (they will drift; the symbol names are the stable handle).
+The sections below describe the whole system (Phases 1 and 2 were merged earlier in PR #1). The PR that merges Phase 3 plus the rename to Alethea is about 130 files and 12,000 added lines, much of it renamed files, tests and docs; the sizes in section 1 describe the whole tree. **The product code is 20 files and about 5,600 lines.** This guide tells you what to read, what to skip, which properties matter most, where each is enforced and tested, how to try to break them, and what has *not* been verified. Line numbers refer to the head of `autocraft/kickoff` when this guide was written (they will drift; the symbol names are the stable handle).
 
 ## 1. What is actually in the diff
 
