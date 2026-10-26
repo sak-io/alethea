@@ -15,9 +15,14 @@ from collections import OrderedDict
 from functools import lru_cache
 from array import array
 
-SALT = b"engram-v1"  # historical value kept on purpose (pre-rename name): changing it re-rolls every n-gram vector and the tuned thresholds
+SALT = b"alethea-v1"
 DIM = 512
-EMBEDDER_ID = "hashed-ngram-v1:512"
+# The id's version number names the VECTOR ALGORITHM (salt, features, weights, dimension): bump it
+# whenever any of those changes, so rows written by the old algorithm are never compared with new
+# vectors (`mnemo reembed` rewrites them). v1 = the same features under the pre-rename salt, which
+# only development databases ever contained.
+EMBEDDER_ID = "hashed-ngram-v2:512"
+RETIRED_HASHED_IDS = frozenset({"hashed-ngram-v1:512"})
 W_UNI, W_BI, W_GRAM = 1.0, 0.5, 0.12
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
@@ -203,7 +208,8 @@ class Embedder:
     dim = 0
     NEAR_DUPLICATE = 0.88      # merge threshold on similarity
     SEM_GAIN = 1.8             # recall: semantic scale factor (sem * gain, capped at 1)
-    SEM_MIN_COS = 0.30         # recall: cosine at which a hit counts as semantic
+    SEM_MIN_COS = 0.30         # recall: cosine at which a hit counts as semantic (the hashed
+                               # embedder uses recall.SEM_MIN_COS = 0.35, ADR 0014; plugins: unmeasured)
     RECOMBINE_LO = 0.34        # consolidate: recombine band
     RECOMBINE_HI = 0.88
 
@@ -752,7 +758,9 @@ def embed_batch(texts, embedder_id=None):
     """
     global _failing
     texts = list(texts)
-    if embedder_id == EMBEDDER_ID:
+    if embedder_id == EMBEDDER_ID or embedder_id in RETIRED_HASHED_IDS:
+        # A retired hashed id never lends its label to current vectors: they would sit next to
+        # vectors of the old algorithm that carry the same id and be compared with them.
         return EMBEDDER_ID, [embed(t) for t in texts]
     inst = None
     if embedder_id is None:

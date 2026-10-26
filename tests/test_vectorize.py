@@ -15,7 +15,7 @@ SNIPPET = ("from alethea import vectorize as v; import sys; "
 class TestVectorize(unittest.TestCase):
     def test_embedder_identity_and_shape(self):
         e = v.HashedNgramEmbedder()
-        self.assertEqual(e.id, "hashed-ngram-v1:512")
+        self.assertEqual(e.id, "hashed-ngram-v2:512")
         self.assertEqual(e.dim, 512)
         self.assertEqual(len(e.embed("hello world")), 512 * 4)
 

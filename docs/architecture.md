@@ -55,7 +55,7 @@ Embedders (`alethea/vectorize.py`, ADR 0010, 0011):
 
 | `ALETHEA_EMBEDDER` | Module | Notes |
 |---|---|---|
-| `hash` (default) | `vectorize.py` | 512-dim hashed n-gram vectors, id `hashed-ngram-v1:512`. Offline, deterministic. |
+| `hash` (default) | `vectorize.py` | 512-dim hashed n-gram vectors, id `hashed-ngram-v2:512`. Offline, deterministic. |
 | `fastembed:<model>` | `alethea/embedders_ext.py` | Local ONNX model through the optional package. |
 | `openai:<model>` | `alethea/embedders_remote.py` | Sends redacted text to an OpenAI-compatible endpoint; double opt-in; `http.client` only. |
 

@@ -60,7 +60,7 @@ Each kind has its own decay exponent (`DECAY` dict):
 
 - `memories`: id, kind, content, gist, keywords, salience, strength, access_count, created_at, last_access, status (`active` / `archived` / `suppressed`), session_id, cwd, repo_root, vector (BLOB, float32), embedder_id, meta (JSON).
 - `repo_root` is nullable (non-git directories) and indexed. See "Repository context" below.
-- `embedder_id` (for example `hashed-ngram-v1:512`) records which embedder produced each vector, so vectors from different embedders are never compared.
+- `embedder_id` (for example `hashed-ngram-v2:512`) records which embedder produced each vector, so vectors from different embedders are never compared.
 - `mem_fts`: FTS5 virtual table (porter + unicode61 tokenizer) over content/gist/keywords, kept in sync by `AFTER INSERT/UPDATE/DELETE` triggers.
 - `edges`: directed association graph `(src, dst, kind, weight, created_at)`. On a repeated link, upsert with `weight = MIN(1.0, weight + 0.15)` (Hebbian strengthening). Edge kinds include `abstracts` and `recombined`.
 - `journal`: raw hippocampal buffer. Every observed turn is stored, with a `consolidated` flag that consolidation clears.
@@ -96,7 +96,7 @@ The default embedder is not a learned model. Instead, a 512-dim sparse-projected
 
 Details that matter:
 
-- Hash with `blake2b` and a fixed salt (`b"engram-v1"`). Do not use Python's `hash()`: `PYTHONHASHSEED` randomization would make vectors written by one process unreadable by another.
+- Hash with `blake2b` and a fixed salt (`b"alethea-v1"`). Do not use Python's `hash()`: `PYTHONHASHSEED` randomization would make vectors written by one process unreadable by another.
 - L2-normalize at the end.
 - `stem()` is a hand-rolled suffix stripper (plural first, then longest suffix first), built to agree with FTS5's porter stemmer.
 - Also provides `cosine` and `jaccard`.
@@ -107,7 +107,7 @@ Related text scores about 0.3–0.45 cosine versus about 0 for unrelated text. T
 
 ```python
 class Embedder(Protocol):
-    id: str            # stable, versioned, e.g. "hashed-ngram-v1:512"
+    id: str            # stable, versioned, e.g. "hashed-ngram-v2:512"
     dim: int
     def embed(self, text: str) -> bytes | Sequence[float]: ...
 ```

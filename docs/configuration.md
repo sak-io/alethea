@@ -47,7 +47,7 @@ Notes:
 
 | Value | Meaning |
 |---|---|
-| `hash` (default) | Built-in hashed n-gram embedder, id `hashed-ngram-v1:512`. Stdlib only, offline, deterministic. |
+| `hash` (default) | Built-in hashed n-gram embedder, id `hashed-ngram-v2:512`. Stdlib only, offline, deterministic. |
 | `fastembed:<model>` | Local ONNX sentence embedder through the optional `fastembed` package. Embedder id `fastembed:<model>:<dim>` (384 for MiniLM). |
 | `openai:<model>` | Not available yet (T26); today it is reported as an unknown embedder and the hashed embedder is used. |
 
@@ -93,6 +93,7 @@ Rewrites the vector and `embedder_id` of active memories whose id differs from t
 - `mnemo reembed --dry-run`: how many memories and characters would be sent, to which host. Sends nothing.
 - `mnemo reembed --yes [--batch N] [--include-identity]`: starts a background run. **Only a remote target (`openai:`) needs `--yes`; a local target (`hash`, `fastembed:`) starts immediately without it.** For a remote embedder it refuses without `--yes` (exit 0 with a message; exit 4 with `--strict`; an interactive terminal is asked instead). The daemon enforces the same with `confirm`.
 - The consent is tied to the endpoint: the run records the host it was confirmed for, and if the host differs when the run resumes (restart, changed `ALETHEA_EMBEDDER_URL`), it pauses with `embedder host changed` and sends nothing until you run `mnemo reembed --yes` again.
+- Upgrading a development database written by an older build: its rows carry the retired id `hashed-ngram-v1:512` (same features, pre-rename hash salt, so the vectors differ). They are treated as a different embedder: recall reaches them through the full-text channel only, dedup and the recombine pass never compare them with current rows. With `ALETHEA_EMBEDDER=hash`, run `mnemo reembed` (local, no `--yes` needed; add `--include-identity` for identity memories, which are skipped by default) to rewrite them under `hashed-ngram-v2:512`.
 - `mnemo reembed --status` / `--cancel`; progress (done/total, rate, ETA, last error) is also in `mnemo status`.
 - IDENTITY memories are skipped (they are the most personal) unless `--include-identity`. Archived and suppressed rows are not migrated.
 - Batches of 32 (max 64) are embedded without the engine lock and written in one transaction with the cursor (`alethea_meta` key `reembed`), so a restart or `kill -9` resumes at the next batch; a run that was in progress when the daemon stopped continues at the next start. Failed batches are retried with backoff; after 5 in a row the run pauses with the reason and `--yes` resumes it. Until a row is migrated it is found by full-text search only.
