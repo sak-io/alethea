@@ -9,6 +9,7 @@ description = "Long-term memory for AI coding agents: local daemon, mnemo CLI, M
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
+authors = [{ name = "sak-io" }]
 dependencies = []
 classifiers = [
     "Development Status :: 3 - Alpha",
