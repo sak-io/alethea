@@ -31,7 +31,7 @@ classifiers = [
 local = ["fastembed>=0.3"]  # opt-in local ONNX embedder (ALETHEA_EMBEDDER=fastembed:<model>)
 
 [project.urls]
-Repository = "https://github.com/sak-io/engram"
+Repository = "https://github.com/sak-io/alethea"
 
 [project.scripts]
 mnemo = "alethea.cli:main"

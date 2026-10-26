@@ -4,7 +4,7 @@ Alethea ships its Claude Code hooks with the installed package. Install the pack
 
 ```
 pipx install alethea      # once published to PyPI; until then:
-pipx install git+https://github.com/sak-io/engram   # once this work is merged to main
+pipx install git+https://github.com/sak-io/alethea
 mnemo install claude-code
 ```
 
