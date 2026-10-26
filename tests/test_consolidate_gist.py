@@ -2,8 +2,8 @@ import os
 import time
 import unittest
 
-from engram import consolidate, encode
-from engram.cortex import Cortex
+from alethea import consolidate, encode
+from alethea.cortex import Cortex
 
 DATA = os.path.join(os.path.dirname(__file__), "data", "transcripts")
 

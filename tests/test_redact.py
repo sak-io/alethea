@@ -1,7 +1,7 @@
 import time
 import unittest
 
-from engram.redact import redact, redact_with_kinds
+from alethea.redact import redact, redact_with_kinds
 from tests.data.secrets import NEGATIVE, POSITIVE
 
 
@@ -106,7 +106,7 @@ class RedactTests(unittest.TestCase):
     def test_code_not_overredacted(self):
         for t in ["password = input('Password: ')", "token = tokenizer.encode(text)",
                   "secret = None", "auth_token = get_token()", "password: required",
-                  "api_key = os.environ['API_KEY']", "token_path=/etc/engram/token",
+                  "api_key = os.environ['API_KEY']", "token_path=/etc/alethea/token",
                   "rotate the password policy", "password = user.password",
                   "api_key = config.api_key", "token = None"]:
             with self.subTest(t=t):

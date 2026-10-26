@@ -1,7 +1,7 @@
 import unittest
 
-from engram import consolidate
-from engram.cortex import Cortex, DAY_S, DOWNSCALE_RATE
+from alethea import consolidate
+from alethea.cortex import Cortex, DAY_S, DOWNSCALE_RATE
 
 
 class Clock:

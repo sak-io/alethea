@@ -9,11 +9,11 @@ import tempfile
 import time
 import unittest
 
-from engram import mcp_server
+from alethea import mcp_server
 from tests.daemon_helpers import ROOT, InProc, make_home
 
-SCRIPT = os.path.join(ROOT, "engram", "mcp_server.py")
-MODES = {"module": [sys.executable, "-m", "engram.mcp_server"],
+SCRIPT = os.path.join(ROOT, "alethea", "mcp_server.py")
+MODES = {"module": [sys.executable, "-m", "alethea.mcp_server"],
          "path": [sys.executable, SCRIPT]}
 
 
@@ -21,8 +21,8 @@ class Mcp:
     """MCP server subprocess driven over pipes."""
 
     def __init__(self, home, cwd=None, mode="module", extra_env=None):
-        env = dict(os.environ, ENGRAM_HOME=home, PYTHONDONTWRITEBYTECODE="1")
-        for k in ("ENGRAM_PORT", "ENGRAM_HOST", "ENGRAM_TOKEN", "ENGRAM_LLM_CONSOLIDATE"):
+        env = dict(os.environ, ALETHEA_HOME=home, PYTHONDONTWRITEBYTECODE="1")
+        for k in ("ALETHEA_PORT", "ALETHEA_HOST", "ALETHEA_TOKEN", "ALETHEA_LLM_CONSOLIDATE"):
             env.pop(k, None)
         env.update(extra_env or {})
         if mode == "module":
@@ -108,8 +108,8 @@ class RoundTrip(unittest.TestCase):
                 self.assertIn("tools", r["result"]["capabilities"])
                 names = [t["name"] for t in m.rpc("tools/list")["result"]["tools"]]
                 self.assertEqual(sorted(names), sorted(
-                    ["recall", "remember", "reflect", "forget", "engram_status"]))
-                text, err = m.tool("engram_status")
+                    ["recall", "remember", "reflect", "forget", "alethea_status"]))
+                text, err = m.tool("alethea_status")
                 self.assertTrue(text.startswith("memory online"), text)
                 self.assertFalse(err)
                 self.assertEqual(m.rpc("ping")["result"], {})
@@ -206,12 +206,14 @@ class RoundTrip(unittest.TestCase):
         m.close()
 
     def test_consolidate_tool_only_when_enabled(self):
-        m = Mcp(self.d.home, extra_env={"ENGRAM_LLM_CONSOLIDATE": "1"})
+        m = Mcp(self.d.home, extra_env={"ALETHEA_LLM_CONSOLIDATE": "1"})
         m.init()
         names = [t["name"] for t in m.rpc("tools/list")["result"]["tools"]]
-        self.assertIn("engram_consolidate_pending", names)
-        text, err = m.tool("engram_consolidate_pending")
-        self.assertEqual((text, err), ("consolidation done", False))
+        self.assertIn("alethea_consolidate_pending", names)
+        self.assertIn("alethea_distill_submit", names)
+        text, err = m.tool("alethea_consolidate_pending")  # the daemon here has the flag off
+        self.assertFalse(err)
+        self.assertIn("nothing to distil", text)
         m.close()
 
 
@@ -308,7 +310,7 @@ class Protocol(unittest.TestCase):
         m.close()
 
     def test_stdout_purity_with_noisy_environment(self):
-        m = Mcp(self.home, extra_env={"ENGRAM_TOKEN": "x" * 10})
+        m = Mcp(self.home, extra_env={"ALETHEA_TOKEN": "x" * 10})
         m.init()
         m.tool("recall", cue="anything")
         m.tool("remember", content="Some durable fact about the system design.")
@@ -331,7 +333,7 @@ class DaemonDown(unittest.TestCase):
         m.init()
         for name, args in [("recall", {"cue": "x"}), ("remember", {"content": "a fact here"}),
                            ("reflect", {"content": "an insight"}), ("forget", {"id": "abc"}),
-                           ("engram_status", {})]:
+                           ("alethea_status", {})]:
             self.assertEqual(m.tool(name, **args), ("memory offline", False), name)
         self.assertEqual(m.rpc("ping")["result"], {})
         rc, rest, err = m.close()
@@ -340,13 +342,13 @@ class DaemonDown(unittest.TestCase):
 
     def test_hung_daemon_returns_within_budget(self):
         s = socket.socket(socket.AF_UNIX)
-        s.bind(os.path.join(self.home, "engram.sock"))
+        s.bind(os.path.join(self.home, "alethea.sock"))
         s.listen(5)  # accepts at the kernel level, never replies
         self.addCleanup(s.close)
         # in-process with TIMEOUT_MCP shrunk from 5 s to 1 s (same code path, ~4 s faster)
         from unittest import mock
-        from engram import client
-        srv = mcp_server.Server(env={"ENGRAM_HOME": self.home}, cwd=self.home)
+        from alethea import client
+        srv = mcp_server.Server(env={"ALETHEA_HOME": self.home}, cwd=self.home)
         t0 = time.monotonic()
         with mock.patch.object(client, "TIMEOUT_MCP", 1.0):
             self.assertEqual(srv.run_tool("recall", {"cue": "hello"}), ("memory offline", False))

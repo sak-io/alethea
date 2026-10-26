@@ -4,7 +4,7 @@ import os
 import re
 import unittest
 
-import engram
+import alethea
 from tests.daemon_helpers import ROOT
 
 with open(os.path.join(ROOT, "pyproject.toml"), encoding="utf-8") as f:
@@ -21,20 +21,23 @@ class PyprojectTest(unittest.TestCase):
     def test_no_runtime_dependencies(self):
         proj = section("project")
         self.assertRegex(proj, r"(?m)^dependencies\s*=\s*\[\s*\]")
-        self.assertNotIn("optional-dependencies", TEXT)
-        self.assertNotIn("[project.optional", TEXT)
+        # T25: the only optional extra is the opt-in local embedder; nothing at runtime.
+        extras = re.findall(r"(?m)^\[project\.optional-dependencies\]\s*\n((?:[^\[\n].*\n?)*)", TEXT)
+        self.assertEqual(len(extras), 1)
+        self.assertEqual(re.findall(r"(?m)^(\w+)\s*=", extras[0]), ["local"])
+        self.assertIn("fastembed", extras[0])
 
     def test_setuptools_is_build_requirement_only(self):
         self.assertRegex(section("build-system"), r'requires\s*=\s*\["setuptools>=61"\]')
 
     def test_version_is_dynamic_from_package(self):
         self.assertIn('dynamic = ["version"]', section("project"))
-        self.assertIn('attr = "engram.__version__"', section("tool.setuptools.dynamic"))
-        self.assertRegex(engram.__version__, r"^\d+\.\d+\.\d+")
+        self.assertIn('attr = "alethea.__version__"', section("tool.setuptools.dynamic"))
+        self.assertRegex(alethea.__version__, r"^\d+\.\d+\.\d+")
 
     def test_metadata(self):
         proj = section("project")
-        self.assertIn('name = "engram-memory"', proj)
+        self.assertIn('name = "alethea"', proj)
         self.assertIn('requires-python = ">=3.9"', proj)
         self.assertIn("Apache-2.0", proj)
         self.assertTrue(os.path.isfile(os.path.join(ROOT, "LICENSE")))
@@ -42,15 +45,15 @@ class PyprojectTest(unittest.TestCase):
     def test_console_scripts_resolve_to_callables(self):
         scripts = dict(re.findall(r'(?m)^([\w-]+)\s*=\s*"([\w.]+:\w+)"', section("project.scripts")))
         self.assertEqual(scripts, {
-            "mnemo": "engram.cli:main", "engram-daemon": "engram.daemon:main",
-            "engram-hook": "engram.hooks.engram_hook:main",
-            "engram-mcp": "engram.mcp_server:main"})
+            "mnemo": "alethea.cli:main", "alethea-daemon": "alethea.daemon:main",
+            "alethea-hook": "alethea.hooks.alethea_hook:main",
+            "alethea-mcp": "alethea.mcp_server:main"})
         for target in scripts.values():
             mod, func = target.split(":")
             self.assertTrue(callable(getattr(importlib.import_module(mod), func)), target)
 
-    def test_discovery_limited_to_engram(self):
-        self.assertIn('include = ["engram*"]', section("tool.setuptools.packages.find"))
+    def test_discovery_limited_to_alethea(self):
+        self.assertIn('include = ["alethea*"]', section("tool.setuptools.packages.find"))
 
     def test_build_artifacts_are_gitignored(self):
         with open(os.path.join(ROOT, ".gitignore"), encoding="utf-8") as f:

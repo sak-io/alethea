@@ -11,9 +11,9 @@ import time
 import unittest
 from unittest import mock
 
-from engram import client
-from engram import daemon
-from engram.daemon import Engram, Server, StartupError
+from alethea import client
+from alethea import daemon
+from alethea.daemon import Alethea, Server, StartupError
 from tests.daemon_helpers import ROOT, make_home, spawn
 
 TOKEN = "t" * 8 + "0123456789abcdef-secret-TOKEN"
@@ -38,14 +38,14 @@ class FakeClock:
 class Daemon:
     def __init__(self, home=None, extra=None, **skw):
         self.home = home or make_home()
-        self.env = {"ENGRAM_HOME": self.home, "PATH": os.environ.get("PATH", "")}
+        self.env = {"ALETHEA_HOME": self.home, "PATH": os.environ.get("PATH", "")}
         self.env.update(extra or {})
-        self.engram = Engram(home=self.home, env=self.env)
-        self.server = Server(self.engram, env=self.env, **skw)
+        self.alethea = Alethea(home=self.home, env=self.env)
+        self.server = Server(self.alethea, env=self.env, **skw)
         try:
             assert self.server.acquire_instance()
         except BaseException:
-            self.engram.close()
+            self.alethea.close()
             raise
         self.server.start()
         self.port = self.server.tcp_addr[1] if self.server.tcp_addr else None
@@ -88,7 +88,7 @@ def req(verb, token=None, **kw):
 class TcpAuth(unittest.TestCase):
     def setUp(self):
         self.clock = FakeClock()
-        self.d = Daemon(extra={"ENGRAM_PORT": "0", "ENGRAM_TOKEN": TOKEN}, auth_clock=self.clock,
+        self.d = Daemon(extra={"ALETHEA_PORT": "0", "ALETHEA_TOKEN": TOKEN}, auth_clock=self.clock,
                         auth_limits={"delay_unit": 0.001, "delay_cap": 0.01, "rate": 1e6,
                                      "burst": 1e6})
         self.addCleanup(self.d.stop)
@@ -118,20 +118,20 @@ class TcpAuth(unittest.TestCase):
         self.assertTrue(raw(self.d.port, req("ping", TOKEN))["ok"])
 
     def test_unix_stays_trusted_without_token(self):
-        r = client.call("ping", env={"ENGRAM_HOME": self.d.home, "ENGRAM_TOKEN": "bad"})
+        r = client.call("ping", env={"ALETHEA_HOME": self.d.home, "ALETHEA_TOKEN": "bad"})
         self.assertTrue(r.get("ok"))
-        st = os.stat(os.path.join(self.d.home, "engram.sock")).st_mode
+        st = os.stat(os.path.join(self.d.home, "alethea.sock")).st_mode
         self.assertEqual(stat.S_IMODE(st), 0o600)
 
     def test_compare_digest_is_used(self):
-        with mock.patch("engram.daemon.hmac.compare_digest",
+        with mock.patch("alethea.daemon.hmac.compare_digest",
                         wraps=daemon.hmac.compare_digest) as cd:
             raw(self.d.port, req("ping", TOKEN))
             raw(self.d.port, req("ping", "nope" * 8))
         self.assertEqual(cd.call_count, 2)
 
     def test_correct_token_served_after_many_failures(self):
-        d = Daemon(extra={"ENGRAM_PORT": "0", "ENGRAM_TOKEN": TOKEN},
+        d = Daemon(extra={"ALETHEA_PORT": "0", "ALETHEA_TOKEN": TOKEN},
                    auth_limits={"delay_unit": 0.001, "delay_cap": 0.01, "rate": 1e6, "burst": 1e6})
         self.addCleanup(d.stop)
         for _ in range(50):
@@ -150,7 +150,7 @@ class TcpAuth(unittest.TestCase):
         lim.ok("1.1.1.1")
         self.assertEqual(lim.fail("1.1.1.1"), ds[0])
         # measured on the wire: later failures are slower, still capped
-        d = Daemon(extra={"ENGRAM_PORT": "0", "ENGRAM_TOKEN": TOKEN},
+        d = Daemon(extra={"ALETHEA_PORT": "0", "ALETHEA_TOKEN": TOKEN},
                    auth_limits={"delay_unit": 0.05, "delay_cap": 0.4, "rate": 1e6, "burst": 1e6})
         self.addCleanup(d.stop)
         times = []
@@ -164,7 +164,7 @@ class TcpAuth(unittest.TestCase):
     def test_failure_flood_cannot_starve_correct_client(self):
         import threading
         stop = threading.Event()
-        d = Daemon(extra={"ENGRAM_PORT": "0", "ENGRAM_TOKEN": TOKEN})  # default limits
+        d = Daemon(extra={"ALETHEA_PORT": "0", "ALETHEA_TOKEN": TOKEN})  # default limits
         self.addCleanup(d.stop)
 
         def flood():
@@ -187,7 +187,7 @@ class TcpAuth(unittest.TestCase):
         self.assertLess(worst, 1.0)
 
     def test_failures_over_global_budget_are_dropped_silently(self):
-        d = Daemon(extra={"ENGRAM_PORT": "0", "ENGRAM_TOKEN": TOKEN},
+        d = Daemon(extra={"ALETHEA_PORT": "0", "ALETHEA_TOKEN": TOKEN},
                    auth_limits={"delay_unit": 0.0001, "delay_cap": 0.0001, "rate": 0.001,
                                 "burst": 2})
         self.addCleanup(d.stop)
@@ -228,13 +228,13 @@ class TcpAuth(unittest.TestCase):
 
     def test_token_not_forwarded_to_verbs(self):
         seen = []
-        orig = self.d.engram.handle
-        self.d.engram.handle = lambda verb, params: (seen.append(dict(params)), orig(verb, params))[1]
+        orig = self.d.alethea.handle
+        self.d.alethea.handle = lambda verb, params: (seen.append(dict(params)), orig(verb, params))[1]
         raw(self.d.port, req("ping", TOKEN))
         self.assertEqual(seen, [{}])
 
     def test_oversize_request_dropped(self):
-        d = Daemon(extra={"ENGRAM_PORT": "0", "ENGRAM_TOKEN": TOKEN}, max_request=1024)
+        d = Daemon(extra={"ALETHEA_PORT": "0", "ALETHEA_TOKEN": TOKEN}, max_request=1024)
         self.addCleanup(d.stop)
         r = raw(d.port, req("remember", TOKEN, content="a" * 5000))
         self.assertEqual(r, {"ok": False, "error": "request too large"})
@@ -242,7 +242,7 @@ class TcpAuth(unittest.TestCase):
     def test_slow_loris_dropped(self):
         # short server deadlines (default 1.5 s first byte / 5 s read) keep the test ~1 s;
         # the behaviour under test (idle and partial lines are dropped) is the same.
-        d = Daemon(extra={"ENGRAM_PORT": "0", "ENGRAM_TOKEN": TOKEN}, read_timeout=0.6)
+        d = Daemon(extra={"ALETHEA_PORT": "0", "ALETHEA_TOKEN": TOKEN}, read_timeout=0.6)
         self.addCleanup(d.stop)
         t0 = time.monotonic()
         s = raw(d.port, b"", read=False)
@@ -255,7 +255,7 @@ class TcpAuth(unittest.TestCase):
         self.assertIn(b"read timeout", s2.recv(100))
 
     def test_connection_cap_applies_to_tcp(self):
-        d = Daemon(extra={"ENGRAM_PORT": "0", "ENGRAM_TOKEN": TOKEN})
+        d = Daemon(extra={"ALETHEA_PORT": "0", "ALETHEA_TOKEN": TOKEN})
         self.addCleanup(d.stop)
         import threading
         d.server.pending = threading.BoundedSemaphore(1)
@@ -269,21 +269,21 @@ class Policy(unittest.TestCase):
     def mk(self, extra, **kw):
         home = make_home()
         self.addCleanup(shutil.rmtree, home, True)
-        env = {"ENGRAM_HOME": home}
+        env = {"ALETHEA_HOME": home}
         env.update(extra)
-        e = Engram(home=home, env=env)
+        e = Alethea(home=home, env=env)
         self.addCleanup(e.close)
         return Server(e, env=env, **kw)
 
     def test_refusals(self):
         cases = [
-            {"ENGRAM_BIND": "0.0.0.0", "ENGRAM_PORT": "0"},
-            {"ENGRAM_BIND": "0.0.0.0", "ENGRAM_PORT": "0", "ENGRAM_TOKEN": "short"},
-            {"ENGRAM_CONTAINER": "1", "ENGRAM_BIND": "127.0.0.1", "ENGRAM_PORT": "5"},
-            {"ENGRAM_CONTAINER": "1", "ENGRAM_PORT": "5", "ENGRAM_TOKEN": TOKEN},  # no bind
-            {"ENGRAM_CONTAINER": "1", "ENGRAM_BIND": "0.0.0.0", "ENGRAM_PORT": "5",
-             "ENGRAM_TOKEN": "x" * 15},
-            {"ENGRAM_PORT": "70000"},
+            {"ALETHEA_BIND": "0.0.0.0", "ALETHEA_PORT": "0"},
+            {"ALETHEA_BIND": "0.0.0.0", "ALETHEA_PORT": "0", "ALETHEA_TOKEN": "short"},
+            {"ALETHEA_CONTAINER": "1", "ALETHEA_BIND": "127.0.0.1", "ALETHEA_PORT": "5"},
+            {"ALETHEA_CONTAINER": "1", "ALETHEA_PORT": "5", "ALETHEA_TOKEN": TOKEN},  # no bind
+            {"ALETHEA_CONTAINER": "1", "ALETHEA_BIND": "0.0.0.0", "ALETHEA_PORT": "5",
+             "ALETHEA_TOKEN": "x" * 15},
+            {"ALETHEA_PORT": "70000"},
         ]
         for extra in cases:
             srv = self.mk(extra)
@@ -296,8 +296,8 @@ class Policy(unittest.TestCase):
         home = make_home()
         self.addCleanup(shutil.rmtree, home, True)
         secret = "short-secret"
-        p = spawn(home, {"ENGRAM_CONTAINER": "1", "ENGRAM_BIND": "0.0.0.0",
-                         "ENGRAM_PORT": "7777", "ENGRAM_TOKEN": secret})
+        p = spawn(home, {"ALETHEA_CONTAINER": "1", "ALETHEA_BIND": "0.0.0.0",
+                         "ALETHEA_PORT": "7777", "ALETHEA_TOKEN": secret})
         out, err = p.communicate(timeout=15)
         self.assertNotEqual(p.returncode, 0)
         self.assertIn(b"at least 16", err)
@@ -305,22 +305,22 @@ class Policy(unittest.TestCase):
 
     def test_container_mode_tcp_only_and_client_no_autostart(self):
         port = free_port()
-        extra = {"ENGRAM_CONTAINER": "1", "ENGRAM_BIND": "127.0.0.1", "ENGRAM_PORT": str(port),
-                 "ENGRAM_TOKEN": TOKEN}
+        extra = {"ALETHEA_CONTAINER": "1", "ALETHEA_BIND": "127.0.0.1", "ALETHEA_PORT": str(port),
+                 "ALETHEA_TOKEN": TOKEN}
         d = Daemon(extra=extra)
         self.addCleanup(d.stop)
-        self.assertFalse(os.path.exists(os.path.join(d.home, "engram.sock")))
-        cenv = {"ENGRAM_HOME": make_home(), "ENGRAM_CONTAINER": "1", "ENGRAM_PORT": str(port),
-                "ENGRAM_TOKEN": TOKEN}
-        self.addCleanup(shutil.rmtree, cenv["ENGRAM_HOME"], True)
+        self.assertFalse(os.path.exists(os.path.join(d.home, "alethea.sock")))
+        cenv = {"ALETHEA_HOME": make_home(), "ALETHEA_CONTAINER": "1", "ALETHEA_PORT": str(port),
+                "ALETHEA_TOKEN": TOKEN}
+        self.addCleanup(shutil.rmtree, cenv["ALETHEA_HOME"], True)
         self.assertTrue(client.call("ping", env=cenv)["ok"])
-        self.assertFalse(client.call("ping", env=dict(cenv, ENGRAM_TOKEN="w" * 20)).get("ok"))
+        self.assertFalse(client.call("ping", env=dict(cenv, ALETHEA_TOKEN="w" * 20)).get("ok"))
         with mock.patch("subprocess.Popen") as popen:
             self.assertFalse(client.autostart(env=cenv))
         popen.assert_not_called()
 
     def test_loopback_tcp_without_token_generates_one(self):
-        d = Daemon(extra={"ENGRAM_PORT": "0"})
+        d = Daemon(extra={"ALETHEA_PORT": "0"})
         self.addCleanup(d.stop)
         tp = os.path.join(d.home, "token")
         self.assertEqual(stat.S_IMODE(os.stat(tp).st_mode), 0o600)
@@ -341,7 +341,7 @@ class UnixFallback(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(os.stat(tp).st_mode), 0o600)
         with open(tp) as f:
             self.assertGreaterEqual(len(f.read().strip()), 16)
-        env = {"ENGRAM_HOME": d.home}
+        env = {"ALETHEA_HOME": d.home}
         self.assertTrue(client.call("ping", env=env)["ok"])
         r = client.call("remember", {"content": "fallback path works end to end"}, env=env)
         self.assertTrue(r["ok"], r)
@@ -353,7 +353,7 @@ class UnixFallback(unittest.TestCase):
         base = tempfile.mkdtemp(prefix="eg")
         self.addCleanup(shutil.rmtree, base, True)
         home = os.path.join(base, "d" * 100)
-        self.assertGreater(len(os.path.join(home, "engram.sock")), 104)
+        self.assertGreater(len(os.path.join(home, "alethea.sock")), 104)
         d = Daemon(home=home)
         self.addCleanup(d.stop)
         self.assertTrue(d.server.fallback)
@@ -375,9 +375,9 @@ class UnixFallback(unittest.TestCase):
         self.check_end_to_end(d)
 
     def test_fallback_token_only_sent_to_loopback(self):
-        env = {"ENGRAM_HOME": make_home(), "ENGRAM_HOST": "10.1.2.3", "ENGRAM_PORT": "9", "ENGRAM_CONTAINER": "1",
-               "ENGRAM_TOKEN": TOKEN}
-        self.addCleanup(shutil.rmtree, env["ENGRAM_HOME"], True)
+        env = {"ALETHEA_HOME": make_home(), "ALETHEA_HOST": "10.1.2.3", "ALETHEA_PORT": "9", "ALETHEA_CONTAINER": "1",
+               "ALETHEA_TOKEN": TOKEN}
+        self.addCleanup(shutil.rmtree, env["ALETHEA_HOME"], True)
         with mock.patch.object(client, "_exchange", side_effect=AssertionError) as ex:
             self.assertEqual(client.call("ping", env=env), {"ok": False, "offline": True})
         ex.assert_not_called()
@@ -403,7 +403,7 @@ class Hardening(unittest.TestCase):
             fd = os.open(os.path.join(home, "token"), os.O_WRONLY | os.O_CREAT, 0o600)
             os.write(fd, TOKEN.encode())
             os.close(fd)
-            env = {"ENGRAM_HOME": home, "ENGRAM_CONTAINER": "1"}
+            env = {"ALETHEA_HOME": home, "ALETHEA_CONTAINER": "1"}
             with mock.patch.object(client, "_exchange", side_effect=AssertionError) as ex:
                 self.assertEqual(client.call("ping", env=env), {"ok": False, "offline": True})
             ex.assert_not_called()
@@ -414,7 +414,7 @@ class Hardening(unittest.TestCase):
             self.addCleanup(shutil.rmtree, home, True)
             with open(os.path.join(home, "daemon.json"), "w") as f:
                 json.dump({"host": host, "port": 4321}, f)
-            env = {"ENGRAM_HOME": home, "ENGRAM_CONTAINER": "1", "ENGRAM_TOKEN": TOKEN}
+            env = {"ALETHEA_HOME": home, "ALETHEA_CONTAINER": "1", "ALETHEA_TOKEN": TOKEN}
             with mock.patch.object(client, "_exchange", return_value=b'{"ok":true}') as ex:
                 self.assertTrue(client.call("ping", env=env)["ok"])
             kind, addr, payload, _ = ex.call_args[0]
@@ -423,7 +423,7 @@ class Hardening(unittest.TestCase):
 
     def test_slow_loris_and_idle_sockets_do_not_delay_good_client(self):
         import threading
-        d = Daemon(extra={"ENGRAM_PORT": "0", "ENGRAM_TOKEN": TOKEN})
+        d = Daemon(extra={"ALETHEA_PORT": "0", "ALETHEA_TOKEN": TOKEN})
         self.addCleanup(d.stop)
         idle = [socket.create_connection(("127.0.0.1", d.port)) for _ in range(200)]
         self.addCleanup(lambda: [c.close() for c in idle])
@@ -456,7 +456,7 @@ class Hardening(unittest.TestCase):
         home = make_home()
         self.addCleanup(shutil.rmtree, home, True)
         port = free_port()
-        extra = {"ENGRAM_PORT": str(port), "ENGRAM_TOKEN": TOKEN}
+        extra = {"ALETHEA_PORT": str(port), "ALETHEA_TOKEN": TOKEN}
         for _ in range(2):  # run, SIGTERM, immediately restart on the same port
             p = spawn(home, extra)
             self.addCleanup(lambda p=p: p.poll() is None and p.kill())
@@ -481,8 +481,8 @@ class Hardening(unittest.TestCase):
         home = make_home()
         self.addCleanup(shutil.rmtree, home, True)
         port = free_port()
-        extra = {"ENGRAM_CONTAINER": "1", "ENGRAM_BIND": "127.0.0.1", "ENGRAM_PORT": str(port),
-                 "ENGRAM_TOKEN": TOKEN}
+        extra = {"ALETHEA_CONTAINER": "1", "ALETHEA_BIND": "127.0.0.1", "ALETHEA_PORT": str(port),
+                 "ALETHEA_TOKEN": TOKEN}
         p1 = spawn(home, extra)
         self.addCleanup(lambda: (p1.kill(), p1.communicate()))
         end = time.time() + 10
@@ -506,7 +506,7 @@ class Hardening(unittest.TestCase):
         self.addCleanup(lambda: (p.terminate(), p.communicate()))
         from tests.daemon_helpers import wait_up
         self.assertTrue(wait_up(home))
-        env = {"ENGRAM_HOME": home}
+        env = {"ALETHEA_HOME": home}
         self.assertTrue(client.call("remember", {"content": "long path subprocess"}, env=env)["ok"])
         self.assertEqual(stat.S_IMODE(os.stat(os.path.join(home, "token")).st_mode), 0o600)
         self.assertEqual(client.call("status", env=env)["total"], 1)

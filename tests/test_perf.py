@@ -1,4 +1,4 @@
-"""Scale NFR (T21): 10k memories, recall p95 < 300 ms. Opt-in: ENGRAM_PERF=1."""
+"""Scale NFR (T21): 10k memories, recall p95 < 300 ms. Opt-in: ALETHEA_PERF=1."""
 import os
 import random
 import tempfile
@@ -6,8 +6,8 @@ import time
 import unittest
 from pathlib import Path
 
-from engram import cortex as c
-from engram import recall, vectorize
+from alethea import cortex as c
+from alethea import recall, vectorize
 
 WORDS = ("service database cache queue deploy rollback token session billing invoice "
          "kafka redis postgres gateway latency timeout retry schema migration index shard "
@@ -15,7 +15,7 @@ WORDS = ("service database cache queue deploy rollback token session billing inv
          "monorepo branch review lint build release canary flag tenant audit webhook").split()
 
 
-@unittest.skipUnless(os.environ.get("ENGRAM_PERF") == "1", "set ENGRAM_PERF=1")
+@unittest.skipUnless(os.environ.get("ALETHEA_PERF") == "1", "set ALETHEA_PERF=1")
 class RecallScale(unittest.TestCase):
     N = 10_000
 

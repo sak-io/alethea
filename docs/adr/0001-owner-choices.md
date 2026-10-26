@@ -1,7 +1,7 @@
 # ADR 0001: Owner technical choices (adopted as given)
 
 Status: Accepted (given by owner)
-Sources: `[T§n]` = docs/technical-details.md, `[S Gn]` = docs/specs/engram.md gaps. Alternatives are noted only where the architect sees real risk.
+Sources: `[T§n]` = docs/technical-details.md, `[S Gn]` = docs/specs/alethea.md gaps. Alternatives are noted only where the architect sees real risk.
 
 | # | Decision | Source | Note / risk |
 |---|---|---|---|
@@ -23,7 +23,7 @@ Sources: `[T§n]` = docs/technical-details.md, `[S Gn]` = docs/specs/engram.md g
 ## Owner decisions on spec gaps (AGREED by owner)
 - **G1** Codex, Gemini, Grok are MCP-only; no dedicated integration files.
 - **G3** `reflect` = deliberate write of a synthesized insight; `forget` = status `suppressed` (hidden from recall/export, eligible for later prune).
-- **G14** TCP binds 127.0.0.1 by default; `ENGRAM_TOKEN` required in container mode (details ADR 0004).
+- **G14** TCP binds 127.0.0.1 by default; `ALETHEA_TOKEN` required in container mode (details ADR 0004).
 - **G16** Redact common secret patterns before journaling; purge consolidated journal rows after 30 days.
 - **G20** Apache-2.0.
 - **Scope** v1 = everything in both documents. All other gaps: recommended defaults accepted.

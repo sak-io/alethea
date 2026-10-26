@@ -10,7 +10,7 @@
             "args": [
               "-I",
               "-m",
-              "engram.hooks.engram_hook"
+              "alethea.hooks.alethea_hook"
             ],
             "timeout": 5
           }
@@ -26,7 +26,7 @@
             "args": [
               "-I",
               "-m",
-              "engram.hooks.engram_hook"
+              "alethea.hooks.alethea_hook"
             ],
             "timeout": 5
           }
@@ -42,7 +42,7 @@
             "args": [
               "-I",
               "-m",
-              "engram.hooks.engram_hook"
+              "alethea.hooks.alethea_hook"
             ],
             "timeout": 5
           }
@@ -58,7 +58,7 @@
             "args": [
               "-I",
               "-m",
-              "engram.hooks.engram_hook"
+              "alethea.hooks.alethea_hook"
             ],
             "timeout": 3
           }
@@ -74,7 +74,7 @@
             "args": [
               "-I",
               "-m",
-              "engram.hooks.engram_hook"
+              "alethea.hooks.alethea_hook"
             ],
             "timeout": 5
           }

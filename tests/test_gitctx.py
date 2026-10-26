@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from engram import gitctx
+from alethea import gitctx
 
 
 def git(cwd, *a):

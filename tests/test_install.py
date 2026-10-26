@@ -1,6 +1,6 @@
-"""`mnemo install claude-code` (engram/install.py). Always a temp HOME / CLAUDE_CONFIG_DIR: the
-real ~/.claude is never read or written. The CLI subprocess tests use a tracked temp ENGRAM_HOME
-and ENGRAM_PORT=1 so no daemon is started (and none leaks)."""
+"""`mnemo install claude-code` (alethea/install.py). Always a temp HOME / CLAUDE_CONFIG_DIR: the
+real ~/.claude is never read or written. The CLI subprocess tests use a tracked temp ALETHEA_HOME
+and ALETHEA_PORT=1 so no daemon is started (and none leaks)."""
 import argparse
 import json
 import os
@@ -11,13 +11,13 @@ import tempfile
 import unittest
 from unittest import mock
 
-from engram import install
+from alethea import install
 from tests.daemon_helpers import ROOT, make_home
 
 MNEMO = os.path.join(ROOT, "scripts", "mnemo")
 TEMPLATE = os.path.join(ROOT, "integrations", "claude-code", "settings.hooks.json")
 EVENTS = install.EVENTS
-OWNED = ["-I", "-m", "engram.hooks.engram_hook"]
+OWNED = ["-I", "-m", "alethea.hooks.alethea_hook"]
 
 
 def ns(cmd="install", scope="user", dry_run=False, status=False, mcp=False):
@@ -152,11 +152,11 @@ class MergeTest(unittest.TestCase):
 
     def test_legacy_signatures_are_ours_and_updated_in_place_never_duplicated(self):
         old_module = {"type": "command", "command": "/old/venv/bin/python",
-                      "args": ["-m", "engram.hooks.engram_hook"], "timeout": 5}
+                      "args": ["-m", "alethea.hooks.alethea_hook"], "timeout": 5}
         old_script = {"type": "command", "command": "python3",
-                      "args": ["/home/u/engram/engram/hooks/engram_hook.py"], "timeout": 5}
+                      "args": ["/home/u/alethea/alethea/hooks/alethea_hook.py"], "timeout": 5}
         old_var = {"type": "command", "command": "python3",
-                   "args": ["${CLAUDE_PROJECT_DIR}/engram/hooks/engram_hook.py"], "timeout": 5}
+                   "args": ["${CLAUDE_PROJECT_DIR}/alethea/hooks/alethea_hook.py"], "timeout": 5}
         for legacy in (old_module, old_script, old_var):
             self.assertTrue(install.is_owned(legacy), legacy)
             s = {"hooks": {"Stop": [{"hooks": [dict(legacy)]}]}}
@@ -166,23 +166,23 @@ class MergeTest(unittest.TestCase):
             self.assertEqual(out["hooks"]["Stop"][0]["hooks"][0]["command"], "/new/python")
             self.assertNotIn("Stop", install.remove(s).get("hooks", {}))
 
-    def test_foreign_hooks_that_merely_mention_engram_are_not_owned(self):
-        mod = "engram.hooks.engram_hook"
+    def test_foreign_hooks_that_merely_mention_alethea_are_not_owned(self):
+        mod = "alethea.hooks.alethea_hook"
         foreign = [
-            {"type": "command", "command": "python3", "args": ["engram"]},
-            {"type": "command", "command": "engram-notify --module engram.hooks.engram_hook"},
-            {"type": "command", "command": "python3", "args": ["/other/hooks/engram_hook.py"]},
-            {"type": "command", "command": "python3", "args": ["/x/engram_hook.py"]},
-            {"type": "command", "command": "python3", "args": ["/x/engram/hooks/engram_hook.sh"]},
+            {"type": "command", "command": "python3", "args": ["alethea"]},
+            {"type": "command", "command": "alethea-notify --module alethea.hooks.alethea_hook"},
+            {"type": "command", "command": "python3", "args": ["/other/hooks/alethea_hook.py"]},
+            {"type": "command", "command": "python3", "args": ["/x/alethea_hook.py"]},
+            {"type": "command", "command": "python3", "args": ["/x/alethea/hooks/alethea_hook.sh"]},
             {"type": "command", "command": "echo", "args": ["-I", "-m", mod]},
             {"type": "command", "command": "/usr/bin/node", "args": ["-m", mod]},
             {"type": "command", "command": "python3", "args": ["-I", "-m", mod, "--extra"]},
-            {"type": "command", "command": "python3", "args": ["-m", "engram.hooks.engram_hook2"]},
+            {"type": "command", "command": "python3", "args": ["-m", "alethea.hooks.alethea_hook2"]},
             {"type": "command", "command": "python3 -m " + mod},
             {"type": "command", "command": "python3", "args": "-I -m " + mod},
             {"type": "command", "command": "python3", "env": {"x": mod}},
             {"type": "prompt", "command": "python3", "args": ["-I", "-m", mod]},
-            "engram.hooks.engram_hook", None, 5,
+            "alethea.hooks.alethea_hook", None, 5,
         ]
         for h in foreign:
             self.assertFalse(install.is_owned(h), h)
@@ -207,10 +207,10 @@ class FileTest(Base):
         self.assertEqual(stat.S_IMODE(os.stat(self.path).st_mode), 0o600)
         self.assertEqual(install.installed_events(self.read()), list(EVENTS))
         self.assertEqual(self.read(), install.hooks_block())
-        self.assertFalse(os.path.exists(self.path + ".engram-backup"))
+        self.assertFalse(os.path.exists(self.path + ".alethea-backup"))
         joined = "\n".join(self.out)
         for needle in (self.path, "mnemo status", "mnemo uninstall claude-code",
-                       "ENGRAM_PORT=1", "Privacy", "masked", "~/.engram"):
+                       "ALETHEA_PORT=1", "Privacy", "masked", "~/.alethea"):
             self.assertIn(needle, joined)
 
     def test_second_run_is_unchanged_and_writes_nothing(self):
@@ -229,7 +229,7 @@ class FileTest(Base):
         original = self.text()
         self.assertEqual(self.run_cmd(), 0, self.err)
         self.assertEqual(stat.S_IMODE(os.stat(self.path).st_mode), 0o640)
-        backup = self.path + ".engram-backup"
+        backup = self.path + ".alethea-backup"
         self.assertEqual(self.text(backup), original)
         self.assertEqual(stat.S_IMODE(os.stat(backup).st_mode), 0o640)
         self.assertEqual(self.read()["permissions"], FOREIGN["permissions"])
@@ -294,12 +294,12 @@ class FileTest(Base):
         before = self.text()
         self.assertEqual(self.run_cmd(dry_run=True), 0)
         self.assertEqual(self.text(), before)
-        self.assertFalse(os.path.exists(self.path + ".engram-backup"))
+        self.assertFalse(os.path.exists(self.path + ".alethea-backup"))
         diff = "\n".join(self.out)
         self.assertIn("--- ", diff)
         self.assertIn("+++ ", diff)
         self.assertIn("+            \"command\"", diff)
-        self.assertIn("engram.hooks.engram_hook", diff)
+        self.assertIn("alethea.hooks.alethea_hook", diff)
 
     def test_dry_run_creates_nothing_when_absent(self):
         self.assertEqual(self.run_cmd(dry_run=True), 0)
@@ -323,7 +323,7 @@ class FileTest(Base):
             with open(self.path, "rb") as f:
                 self.assertEqual(f.read(), bad.encode("latin-1"))
             self.assertTrue(self.err)
-            self.assertFalse(os.path.exists(self.path + ".engram-backup"))
+            self.assertFalse(os.path.exists(self.path + ".alethea-backup"))
             self.assertEqual(self.run_cmd(cmd="uninstall"), 2)
 
     def test_refuses_non_object_hooks(self):
@@ -361,7 +361,7 @@ class FileTest(Base):
         self.assertIn(self.run_cmd(), (0, 2))
 
     def test_unexpected_internal_error_is_exit_2_not_1(self):
-        with mock.patch("engram.install.apply", side_effect=KeyError("boom")):
+        with mock.patch("alethea.install.apply", side_effect=KeyError("boom")):
             self.assertEqual(self.run_cmd(), 2)
         self.assertIn("unexpected", self.err[-1])
 
@@ -388,7 +388,7 @@ class FileTest(Base):
         self.run_cmd()
         self.run_cmd(cmd="uninstall")
         self.assertEqual(sorted(os.listdir(self.cfg)),
-                         ["settings.json", "settings.json.engram-backup"])
+                         ["settings.json", "settings.json.alethea-backup"])
 
     def test_failed_write_leaves_original_intact(self):
         self.write(FOREIGN)
@@ -420,7 +420,7 @@ class FileTest(Base):
         with mock.patch("shutil.which", return_value=None):
             self.assertEqual(self.run_cmd(mcp=True), 0)
         joined = "\n".join(self.out)
-        self.assertIn("claude mcp add --scope user engram -- %s -I -m engram.mcp_server"
+        self.assertIn("claude mcp add --scope user alethea -- %s -I -m alethea.mcp_server"
                       % sys.executable, joined)
 
     def test_mcp_runs_claude_list_form_when_present(self):
@@ -435,8 +435,8 @@ class FileTest(Base):
             self.assertEqual(self.run_cmd(mcp=True), 0, self.err)
         with open(log) as f:
             self.assertEqual(f.read().split("\n")[:-1],
-                             ["mcp", "add", "--scope", "user", "engram", "--", sys.executable,
-                              "-I", "-m", "engram.mcp_server"])
+                             ["mcp", "add", "--scope", "user", "alethea", "--", sys.executable,
+                              "-I", "-m", "alethea.mcp_server"])
         self.assertIn("added", "\n".join(self.out))
 
     def test_mcp_failure_is_exit_1_but_hooks_stay_written(self):
@@ -452,14 +452,14 @@ class FileTest(Base):
 
 
 class CliTest(unittest.TestCase):
-    """The real CLI as a subprocess: temp HOME, no daemon (ENGRAM_PORT=1)."""
+    """The real CLI as a subprocess: temp HOME, no daemon (ALETHEA_PORT=1)."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="ec")
         self.home = os.path.join(self.tmp, "home")
         os.makedirs(self.home)
         self.env = {"PATH": os.environ.get("PATH", ""), "HOME": self.home,
-                    "ENGRAM_HOME": make_home(), "ENGRAM_PORT": "1",
+                    "ALETHEA_HOME": make_home(), "ALETHEA_PORT": "1",
                     "PYTHONDONTWRITEBYTECODE": "1"}
 
     def mnemo(self, *args, cwd=None, env=None):
@@ -522,7 +522,7 @@ class CliTest(unittest.TestCase):
 
     def test_install_does_not_need_or_start_a_daemon(self):
         self.assertEqual(self.mnemo("install", "claude-code").returncode, 0)
-        self.assertFalse(os.path.exists(os.path.join(self.env["ENGRAM_HOME"], "daemon.json")))
+        self.assertFalse(os.path.exists(os.path.join(self.env["ALETHEA_HOME"], "daemon.json")))
 
     def test_unknown_host_is_usage_error(self):
         self.assertEqual(self.mnemo("install", "vim").returncode, 2)

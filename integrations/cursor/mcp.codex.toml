@@ -1,0 +1,3 @@
+[mcp_servers.alethea]
+command = "/ABSOLUTE/PATH/TO/python"
+args = ["-I", "-m", "alethea.mcp_server"]

@@ -9,8 +9,8 @@ import sys
 import tempfile
 import time
 
-from engram import client
-from engram.daemon import Engram, Server
+from alethea import client
+from alethea.daemon import Alethea, Server
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -33,22 +33,22 @@ def track_home(path):
     return path
 
 
-def _is_engram_daemon(pid):
+def _is_alethea_daemon(pid):
     try:
         out = subprocess.run(["ps", "-p", str(int(pid)), "-o", "args="], capture_output=True,
                              text=True, timeout=5).stdout
     except Exception:
         return False
-    return "engram.daemon" in out
+    return "alethea.daemon" in out
 
 
 def reap_daemons():
-    """SIGTERM every engram daemon recorded in a tracked home (verified by command line)."""
+    """SIGTERM every alethea daemon recorded in a tracked home (verified by command line)."""
     for h in list(_HOMES):
         try:
             with open(os.path.join(h, "daemon.json")) as f:
                 pid = json.load(f).get("pid")
-            if pid and _is_engram_daemon(pid):
+            if pid and _is_alethea_daemon(pid):
                 os.kill(int(pid), signal.SIGTERM)
         except Exception:
             pass
@@ -58,13 +58,13 @@ atexit.register(reap_daemons)
 
 
 class InProc:
-    """Engram + Server running in threads of this process."""
+    """Alethea + Server running in threads of this process."""
 
     def __init__(self, home=None, read_timeout=None, max_conns=64, **ekw):
         self.home = home or make_home()
-        self.env = {"ENGRAM_HOME": self.home, "PATH": os.environ.get("PATH", "")}
-        self.engram = Engram(home=self.home, env=self.env, **ekw)
-        self.server = Server(self.engram, read_timeout=read_timeout, max_conns=max_conns)
+        self.env = {"ALETHEA_HOME": self.home, "PATH": os.environ.get("PATH", "")}
+        self.alethea = Alethea(home=self.home, env=self.env, **ekw)
+        self.server = Server(self.alethea, read_timeout=read_timeout, max_conns=max_conns)
         assert self.server.acquire_instance()
         self.server.start()
 
@@ -77,15 +77,15 @@ class InProc:
 
 
 def spawn(home, extra_env=None):
-    env = dict(os.environ, ENGRAM_HOME=home, PYTHONPATH=ROOT, PYTHONDONTWRITEBYTECODE="1")
+    env = dict(os.environ, ALETHEA_HOME=home, PYTHONPATH=ROOT, PYTHONDONTWRITEBYTECODE="1")
     env.update(extra_env or {})
-    return subprocess.Popen([sys.executable, "-m", "engram.daemon"], env=env, cwd=ROOT,
+    return subprocess.Popen([sys.executable, "-m", "alethea.daemon"], env=env, cwd=ROOT,
                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE)
 
 
 def wait_up(home, timeout=10):
-    env = {"ENGRAM_HOME": home}
+    env = {"ALETHEA_HOME": home}
     end = time.time() + timeout
     while time.time() < end:
         if client.call("ping", timeout=0.5, env=env).get("ok"):

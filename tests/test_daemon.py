@@ -8,14 +8,14 @@ import threading
 import time
 import unittest
 
-from engram import client, daemon
+from alethea import client, daemon
 from tests.daemon_helpers import InProc, make_home, spawn, wait_up
 
 
 def raw(home, data, wait=True, timeout=5):
     s = socket.socket(socket.AF_UNIX)
     s.settimeout(timeout)
-    s.connect(os.path.join(home, "engram.sock"))
+    s.connect(os.path.join(home, "alethea.sock"))
     if data:
         try:
             s.sendall(data)
@@ -49,7 +49,7 @@ class VerbTests(unittest.TestCase):
         self.assertTrue(client.ping(env=self.d.env))
         h = self.d.home
         self.assertEqual(stat.S_IMODE(os.stat(h).st_mode), 0o700)
-        self.assertEqual(stat.S_IMODE(os.stat(h + "/engram.sock").st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(os.stat(h + "/alethea.sock").st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(os.stat(h + "/token").st_mode), 0o600)
         with open(h + "/daemon.json") as f:
             self.assertIn("pid", json.load(f))
@@ -125,7 +125,8 @@ class VerbTests(unittest.TestCase):
             self.assertIs(r.get("ok"), False, (verb, p, r))
             self.assertIn("error", r)
             self.assertNotIn("Traceback", json.dumps(r))
-        self.assertEqual(self.d.call("reembed")["error"], "unsupported")
+        self.assertIn("action", self.d.call("reembed")["error"])
+        self.assertIn("distillation is off", self.d.call("pending")["error"])
         self.assertTrue(self.d.call("ping")["ok"])
 
     def test_non_object_and_garbage_requests(self):
@@ -187,7 +188,7 @@ class HardeningTests(unittest.TestCase):
 
     def test_work_slots_exhausted_replies_busy(self):
         gate = threading.Event()
-        self.d.engram.verbs["block"] = lambda p: gate.wait(10) and {"ok": True}
+        self.d.alethea.verbs["block"] = lambda p: gate.wait(10) and {"ok": True}
         ts = [threading.Thread(target=self.d.call, args=("block", None, 12)) for _ in range(4)]
         for t in ts:
             t.start()
@@ -220,7 +221,7 @@ class HardeningTests(unittest.TestCase):
             self.assertTrue(client.ping(env=self.d.env))
 
     def test_exception_in_verb_does_not_kill_server(self):
-        self.d.engram.verbs["boom"] = lambda p: 1 / 0
+        self.d.alethea.verbs["boom"] = lambda p: 1 / 0
         r = self.d.call("boom")
         self.assertEqual(r, {"ok": False, "error": "internal error"})
         self.assertTrue(client.ping(env=self.d.env))
@@ -231,7 +232,7 @@ class SleepLoopTests(unittest.TestCase):
         now = [1000.0]
         d = InProc(mono=lambda: now[0], clock=lambda: now[0])
         try:
-            e = d.engram
+            e = d.alethea
             e.sleep_interval, e.idle_sleep = 900, 180
             self.assertFalse(e.sleep_tick())  # no activity
             d.call("remember", {"content": "Loop probe fact vv12 exists"})
@@ -250,8 +251,8 @@ class SleepLoopTests(unittest.TestCase):
     def test_env_overrides(self):
         home = make_home()
         try:
-            e = daemon.Engram(home=home, env={"ENGRAM_HOME": home, "ENGRAM_SLEEP_INTERVAL": "5",
-                                              "ENGRAM_IDLE_SLEEP": "2"})
+            e = daemon.Alethea(home=home, env={"ALETHEA_HOME": home, "ALETHEA_SLEEP_INTERVAL": "5",
+                                              "ALETHEA_IDLE_SLEEP": "2"})
             self.assertEqual((e.sleep_interval, e.idle_sleep), (5, 2))
             e.close()
         finally:
@@ -260,8 +261,8 @@ class SleepLoopTests(unittest.TestCase):
     def test_sleep_loop_survives_errors(self):
         d = InProc()
         try:
-            d.engram.sleep_due = lambda: 1 / 0
-            self.assertFalse(d.engram.sleep_tick())
+            d.alethea.sleep_due = lambda: 1 / 0
+            self.assertFalse(d.alethea.sleep_tick())
             self.assertTrue(d.call("ping")["ok"])
         finally:
             d.stop()
@@ -293,29 +294,29 @@ class ProcessTests(unittest.TestCase):
         self.procs.append(b)
         self.assertEqual(b.wait(timeout=10), 0)
         self.assertEqual(b.stderr.read(), b"")
-        self.assertTrue(client.ping(env={"ENGRAM_HOME": self.home}))
+        self.assertTrue(client.ping(env={"ALETHEA_HOME": self.home}))
         self.assertIsNone(a.poll())
 
     def test_sigterm_cleans_up(self):
         p = self.start()
-        env = {"ENGRAM_HOME": self.home}
+        env = {"ALETHEA_HOME": self.home}
         client.call("remember", {"content": "Persist across shutdown fact ww55"}, env=env)
         p.send_signal(signal.SIGTERM)
         self.assertEqual(p.wait(timeout=10), 0)
-        self.assertFalse(os.path.exists(self.home + "/engram.sock"))
+        self.assertFalse(os.path.exists(self.home + "/alethea.sock"))
         self.assertFalse(os.path.exists(self.home + "/daemon.json"))
         self.assertFalse(client.ping(env=env))
-        wal = self.home + "/engram.db-wal"
+        wal = self.home + "/alethea.db-wal"
         self.assertTrue(not os.path.exists(wal) or os.path.getsize(wal) == 0)
 
     def test_sigint_cleans_up(self):
         p = self.start()
         p.send_signal(signal.SIGINT)
         self.assertEqual(p.wait(timeout=10), 0)
-        self.assertFalse(os.path.exists(self.home + "/engram.sock"))
+        self.assertFalse(os.path.exists(self.home + "/alethea.sock"))
 
     def test_kill9_mid_request_then_recovery(self):
-        env = {"ENGRAM_HOME": self.home}
+        env = {"ALETHEA_HOME": self.home}
         p = self.start()
         acked = []
         for i in range(5):
@@ -345,7 +346,7 @@ class ProcessTests(unittest.TestCase):
         self.assertFalse(t.is_alive())
         self.assertEqual(client.call("ping", env=env), {"ok": False, "offline": True})
         self.assertTrue(any(r.get("offline") for r in results))
-        self.assertTrue(os.path.exists(self.home + "/engram.sock"))  # stale socket left behind
+        self.assertTrue(os.path.exists(self.home + "/alethea.sock"))  # stale socket left behind
         self.start()  # stale socket cleaned, DB recovered
         ids = {m["id"] for m in client.call("dump", {"limit": 500}, env=env)["memories"]}
         self.assertTrue(set(acked) <= ids)
@@ -356,14 +357,14 @@ class ProcessTests(unittest.TestCase):
 class ClientMinorTests(unittest.TestCase):
     def setUp(self):
         self.home = make_home()
-        self.env = {"ENGRAM_HOME": self.home}
+        self.env = {"ALETHEA_HOME": self.home}
 
     def tearDown(self):
         shutil.rmtree(self.home, ignore_errors=True)
 
     def test_reply_without_ok_is_offline(self):
         srv = socket.socket(socket.AF_UNIX)
-        srv.bind(self.home + "/engram.sock")
+        srv.bind(self.home + "/alethea.sock")
         srv.listen(1)
 
         def serve():

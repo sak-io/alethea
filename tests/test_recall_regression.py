@@ -10,8 +10,8 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
-from engram import cortex as c
-from engram import recall, vectorize
+from alethea import cortex as c
+from alethea import recall, vectorize
 from tests.data import recall_corpus as rc
 from tests.data import recall_heldout as ho
 

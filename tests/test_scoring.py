@@ -1,12 +1,12 @@
 import unittest
 
-from engram import encode
+from alethea import encode
 from tests.data import phrases
 
 
 class AmygdalaTests(unittest.TestCase):
     def test_each_marker_class_fires(self):
-        from engram import markers
+        from alethea import markers
         table = {n: rx for n, _, rx in markers.AMYGDALA}
         for name, text in phrases.AMYGDALA_HITS:
             with self.subTest(name=name, text=text):
@@ -14,7 +14,7 @@ class AmygdalaTests(unittest.TestCase):
                 self.assertGreater(encode.amygdala(text), 0.0)
 
     def test_weights_match_table(self):
-        from engram import markers
+        from alethea import markers
         w = {n: x for n, x, _ in markers.AMYGDALA}
         self.assertEqual(w["absolute"], 0.40)
         self.assertEqual(w["incident"], 0.35)
@@ -62,13 +62,13 @@ class DurabilityTests(unittest.TestCase):
             self.assertLess(encode.durability(t), 0.45)
 
     def test_quantity_units_longest_suffix_first(self):
-        from engram import markers
+        from alethea import markers
         for text, expected in phrases.QUANTITY:
             with self.subTest(text=text):
                 self.assertEqual(bool(markers.QUANTITY.search(text)), expected)
 
     def test_seconds_is_not_bare_s(self):
-        from engram import markers
+        from alethea import markers
         m = markers.QUANTITY.search("took 3 seconds")
         self.assertEqual(m.group(0), "3 seconds")
         self.assertEqual(markers.QUANTITY.search("took 250 ms").group(0), "250 ms")
@@ -81,7 +81,7 @@ class ClassifyTests(unittest.TestCase):
                 self.assertEqual(encode.classify(text), kind)
 
     def test_kind_is_valid(self):
-        from engram import cortex
+        from alethea import cortex
         for text, _ in phrases.CLASSIFY:
             self.assertIn(encode.classify(text), cortex.KINDS)
         self.assertEqual(encode.classify(""), "episodic")
@@ -134,7 +134,7 @@ class AdversarialPerformanceTests(unittest.TestCase):
         self.assertLess(dt, 1.0)
 
     def test_public_functions_are_fast(self):
-        from engram import markers
+        from alethea import markers
         regexes = ([rx for _, _, rx in markers.AMYGDALA]
                    + [markers.IDENTITY, markers.RULE, markers.QUANTITY,
                       markers.CLASS_IDENTITY, markers.CLASS_PROCEDURAL, markers.CLASS_SEMANTIC])
@@ -149,7 +149,7 @@ class AdversarialPerformanceTests(unittest.TestCase):
         print("slowest adversarial: %.3fs" % type(self).slowest)
 
     def test_quantity_regex_linear_even_unclipped(self):
-        from engram import markers
+        from alethea import markers
         for text in ("9," * 50000, "1" * 100000 + "x", "1." * 50000, "$1" * 50000):
             self._time(markers.QUANTITY.search, text)
 

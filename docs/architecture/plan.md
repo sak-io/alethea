@@ -1,6 +1,6 @@
-# Engram: Architecture Plan (adopt mode)
+# Alethea: Architecture Plan (adopt mode)
 
-Status: DRAFT for owner + principal-engineer review. Inputs: docs/specs/engram.md, docs/technical-details.md (`T§`). Owner choices: ADR 0001. New decisions: ADRs 0002-0005.
+Status: DRAFT for owner + principal-engineer review. Inputs: docs/specs/alethea.md, docs/technical-details.md (`T§`). Owner choices: ADR 0001. New decisions: ADRs 0002-0005.
 
 ## 1. Modules and dependencies (build order = T§9)
 
@@ -10,8 +10,8 @@ vectorize ─┬─> cortex ─┬─> recall ──┐
            └───────────────> consolidate (cortex, vectorize, encode)
 redact (pure, no deps; used by encode.observe/remember and daemon)
 gitctx (pure, subprocess git)
-daemon (Engram class: encode, recall, consolidate, redact, export)  <── client (no engram deps, stdlib socket only)
-mcp_server, hooks/engram_hook.py, scripts/mnemo  ->  client + gitctx   (no logic of their own)
+daemon (Alethea class: encode, recall, consolidate, redact, export)  <── client (no alethea deps, stdlib socket only)
+mcp_server, hooks/alethea_hook.py, scripts/mnemo  ->  client + gitctx   (no logic of their own)
 export (reads via daemon verb; writes files)
 plugins (lazy): embedders_ext, distiller
 ```
@@ -19,10 +19,10 @@ plugins (lazy): embedders_ext, distiller
 Rules: `client.py` imports nothing from the engine (keeps hooks fast, fail-soft, and testable without a daemon). Thin layers import only `client`, `gitctx`. No module-level cycle: the encode/recall cycle is broken by the deferred import (T§9). All clocks injected. Phases: P0 skeleton + adversarial tests; P1 core (R1-R16, R20-R24, R26b); P2 Claude Code + export (R17-R19 per spec phase table are engine items already built in P1; P2 here = hooks, wiring, export); P3 optional (R27-R31).
 
 ## 2. Cross-cutting design notes
-- **Data:** one SQLite file `~/.engram/engram.db` (dir 0700). Schema versioned in `engram_meta.schema_version`; migrations = ordered idempotent steps run at open. Vectors float32 BLOB (2 KB/row at 512-d).
+- **Data:** one SQLite file `~/.alethea/alethea.db` (dir 0700). Schema versioned in `alethea_meta.schema_version`; migrations = ordered idempotent steps run at open. Vectors float32 BLOB (2 KB/row at 512-d).
 - **API:** NDJSON, one request per line `{"verb","args","token?","v":1}`; reply `{"ok":bool,...}`. Errors never raise through client. Verbs per T§8 plus `export_rules`, `reembed`, `pending` (G13).
-- **Config:** env > `~/.engram/config.json` (0600) > defaults; thresholds are module constants overridable per embedder.
-- **Observability:** `engram_status` (counts per kind/status, last_sleep, embedder id, FTS5 availability, offline-state), rotating log in `~/.engram/`, log-once on fallbacks. No metrics server.
+- **Config:** env > `~/.alethea/config.json` (0600) > defaults; thresholds are module constants overridable per embedder.
+- **Observability:** `alethea_status` (counts per kind/status, last_sleep, embedder id, FTS5 availability, offline-state), rotating log in `~/.alethea/`, log-once on fallbacks. No metrics server.
 - **Testing:** unittest only. Unit tests per module in `tests/`, fixture phrase tables for marker lists (G23), a committed recall regression corpus (G27), fake clock, fake git, in-process daemon on a temp dir for e2e. CI = `python3 -m unittest discover -s tests -t .` on 3.9 and latest, with a socket guard that fails on non-loopback connects (R1).
 - **Security:** threat model summary in section 4; full `threat-model.md` is produced as part of task T02/T11/T17 outputs and consolidated in T31. Exported and LLM text treated as untrusted. Secrets never logged.
 
@@ -32,7 +32,7 @@ Rules: `client.py` imports nothing from the engine (keeps hooks fast, fail-soft,
 |---|---|---|
 | BLOCKER | **Activation vs downscale (G2)**: with `n` = access count, decaying `strength` never changes activation, so archival never triggers. G2's default (`n_eff = strength`) fixes the mechanism but exposes a second problem: G11 floors age at 1 s, and `d*ln(age)` in seconds drives an unreinforced episodic memory below -3.2 within about 50 minutes. | ADR 0003: strength as `n_eff`, age in days (1-minute floor), injectable clock. Simulated outcome: episodic archives about day 30, semantic about day 40-45 unreinforced. |
 | MAJOR | Decay is counted twice (age term and strength shrink) and downscale is kind-agnostic, so the kind-specific exponents are largely overridden: facts and procedures fade nearly as fast as episodes. | Recommend per-kind downscale rate scaled by `d_kind/0.5`. Ship owner's uniform 0.93 behind a `DOWNSCALE_RATE` table; T05 outputs a half-life table so the owner can choose. |
-| MAJOR | **Container TCP vs G14**: loopback-bound daemon inside a container is unreachable via published port. | ADR 0004: explicit `ENGRAM_BIND`, token mandatory (refuse start), compose publishes `127.0.0.1` only. |
+| MAJOR | **Container TCP vs G14**: loopback-bound daemon inside a container is unreachable via published port. | ADR 0004: explicit `ALETHEA_BIND`, token mandatory (refuse start), compose publishes `127.0.0.1` only. |
 | MAJOR | Global RLock held across a full sleep can exceed the 2 s hook budget and make a healthy daemon look offline. | ADR 0005: per-batch locking. |
 | MAJOR | Redaction (G16) is best-effort; regex lists miss secrets and will over-match (e.g. hex hashes). Also `remember`/`reflect` content must be redacted, not only the journal, or secrets reach LTM and the exported always-on file. | Redact at every ingestion point (`observe`, `remember`, `reflect`, `reembed` not needed); fixture table of positive and negative cases; document as best-effort, never claim secret safety. |
 | MAJOR | Entry-point import breakage when run by absolute path (Cursor) vs `-m` (Claude Code). | ADR 0002 bootstrap and a test per entry style. |

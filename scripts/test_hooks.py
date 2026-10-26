@@ -1,4 +1,4 @@
-"""T22: Claude Code hook script against a REAL daemon (temp ENGRAM_HOME), run as a subprocess
+"""T22: Claude Code hook script against a REAL daemon (temp ALETHEA_HOME), run as a subprocess
 with JSON on stdin exactly like Claude Code does. `python3 -m unittest scripts.test_hooks -v`."""
 import json
 import os
@@ -13,16 +13,16 @@ import threading
 import time
 import unittest
 
-from engram import client
+from alethea import client
 from tests.test_render import HOSTILE, check_context
 from tests.daemon_helpers import ROOT, InProc, make_home, track_home, wait_up
 
-HOOK = os.path.join(ROOT, "engram", "hooks", "engram_hook.py")
+HOOK = os.path.join(ROOT, "alethea", "hooks", "alethea_hook.py")
 
 
 def run_hook(payload, home, cwd=None, argv=(), env_extra=None, raw=None, timeout=15):
     """Return (rc, stdout bytes, stderr bytes, seconds)."""
-    env = {"PATH": os.environ.get("PATH", ""), "ENGRAM_HOME": home,
+    env = {"PATH": os.environ.get("PATH", ""), "ALETHEA_HOME": home,
            "PYTHONDONTWRITEBYTECODE": "1"}
     env.update(env_extra or {})
     data = raw if raw is not None else json.dumps(payload).encode("utf-8")
@@ -45,7 +45,7 @@ def rows(home, sql, args=(), wait=True):
 
 
 def _rows(home, sql, args=()):
-    db = sqlite3.connect(os.path.join(home, "engram.db"), timeout=5)
+    db = sqlite3.connect(os.path.join(home, "alethea.db"), timeout=5)
     try:
         return db.execute(sql, args).fetchall()
     finally:
@@ -69,7 +69,7 @@ class FakeDaemon:
         self.home = make_home()
         self.mode, self.conns = mode, []
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.bind(os.path.join(self.home, "engram.sock"))
+        self.sock.bind(os.path.join(self.home, "alethea.sock"))
         self.sock.listen(8)
         threading.Thread(target=self._loop, daemon=True).start()
 
@@ -199,7 +199,7 @@ class LiveDaemonTests(unittest.TestCase):
 
     def test_daemon_completes_request_after_client_disconnects(self):
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.connect(os.path.join(self.home, "engram.sock"))
+        s.connect(os.path.join(self.home, "alethea.sock"))
         req = {"verb": "observe", "content": "disconnect-proof charlie three",
                "session_id": "s-disc"}
         s.sendall(json.dumps(req).encode() + b"\n")
@@ -262,9 +262,9 @@ class LiveDaemonTests(unittest.TestCase):
         self.hook({"hook_event_name": "Stop", "session_id": "s-sec",
                    "last_assistant_message": "Using %s as requested" % secret2})
         self.assertTrue(rows(self.home, "SELECT 1 FROM journal WHERE session_id='s-sec'"))
-        self.d.engram.cortex.db.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        self.d.alethea.cortex.db.execute("PRAGMA wal_checkpoint(PASSIVE)")
         blob = b""
-        for name in ("engram.db", "engram.db-wal"):
+        for name in ("alethea.db", "alethea.db-wal"):
             p = os.path.join(self.home, name)
             if os.path.exists(p):
                 with open(p, "rb") as f:
@@ -319,7 +319,7 @@ class LiveDaemonTests(unittest.TestCase):
     def test_debug_flag_is_one_line_without_content(self):
         rc, out, err, _ = self.hook({"hook_event_name": "UserPromptSubmit",
                                      "prompt": "topsecretcontent zulu"},
-                                    env_extra={"ENGRAM_HOOK_DEBUG": "1"})
+                                    env_extra={"ALETHEA_HOOK_DEBUG": "1"})
         self.assertEqual((rc, out), (0, b""))
         self.assertEqual(err.count(b"\n"), 1)
         self.assertNotIn(b"topsecretcontent", err)
@@ -329,7 +329,7 @@ class OfflineTests(unittest.TestCase):
     def test_daemon_down_all_events_exit_zero_fast_and_silent(self):
         home = make_home()
         self.addCleanup(shutil.rmtree, home, True)
-        env = {"ENGRAM_PORT": "1"}  # TCP to a closed port: down, and autostart disabled
+        env = {"ALETHEA_PORT": "1"}  # TCP to a closed port: down, and autostart disabled
         for ev in ("SessionStart", "UserPromptSubmit", "Stop", "SessionEnd", "PreCompact", "X"):
             rc, out, err, secs = run_hook(
                 {"hook_event_name": ev, "session_id": "s", "prompt": "p",
@@ -354,7 +354,7 @@ class OfflineTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, home, True)
         p = subprocess.Popen([sys.executable, HOOK, "UserPromptSubmit"], stdin=subprocess.PIPE,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                             env={"PATH": os.environ.get("PATH", ""), "ENGRAM_HOME": home})
+                             env={"PATH": os.environ.get("PATH", ""), "ALETHEA_HOME": home})
         time.sleep(0.5)  # blocked reading stdin
         p.send_signal(signal.SIGTERM)
         out, err = p.communicate(timeout=5)
@@ -363,7 +363,7 @@ class OfflineTests(unittest.TestCase):
     def test_hung_stdin_read_hits_watchdog(self):
         home = make_home()
         self.addCleanup(shutil.rmtree, home, True)
-        env = {"PATH": os.environ.get("PATH", ""), "ENGRAM_HOME": home}
+        env = {"PATH": os.environ.get("PATH", ""), "ALETHEA_HOME": home}
         t = time.monotonic()
         p = subprocess.Popen([sys.executable, HOOK, "UserPromptSubmit"], stdin=subprocess.PIPE,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
@@ -401,7 +401,7 @@ class OfflineTests(unittest.TestCase):
     def test_offline_session_start_autostarts_daemon_without_waiting(self):
         home = make_home()
         def cleanup():
-            r = client.call("status", timeout=1, env={"ENGRAM_HOME": home})
+            r = client.call("status", timeout=1, env={"ALETHEA_HOME": home})
             if r.get("pid"):
                 try:
                     os.kill(r["pid"], 15)

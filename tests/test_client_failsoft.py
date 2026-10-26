@@ -10,7 +10,7 @@ import threading
 import time
 import unittest
 
-from engram import client
+from alethea import client
 
 
 class FakeServer:
@@ -21,7 +21,7 @@ class FakeServer:
         self.seen = []
         if mode == "unix":
             self.sock = socket.socket(socket.AF_UNIX)
-            self.sock.bind(os.path.join(home, "engram.sock"))
+            self.sock.bind(os.path.join(home, "alethea.sock"))
         else:
             self.sock = socket.socket()
             self.sock.bind(("127.0.0.1", 0))
@@ -69,7 +69,7 @@ def ok_handler(c):
 class Base(unittest.TestCase):
     def setUp(self):
         self.home = tempfile.mkdtemp(prefix="eg")
-        self.env = {"ENGRAM_HOME": self.home}
+        self.env = {"ALETHEA_HOME": self.home}
         self.servers = []
 
     def tearDown(self):
@@ -101,7 +101,7 @@ class FailSoft(Base):
 
     def test_stale_socket_file(self):
         s = socket.socket(socket.AF_UNIX)
-        s.bind(os.path.join(self.home, "engram.sock"))
+        s.bind(os.path.join(self.home, "alethea.sock"))
         s.close()
         self.assertOffline(client.call("ping", env=self.env))
 
@@ -163,7 +163,7 @@ class FailSoft(Base):
         self.assertOffline(client.call("x", {"a": "z" * (2 << 20)}, env=self.env))
 
     def test_bad_env_and_args(self):
-        self.assertOffline(client.call(None, None, timeout="bad", env={"ENGRAM_HOME": "/nonexistent/x"}))
+        self.assertOffline(client.call(None, None, timeout="bad", env={"ALETHEA_HOME": "/nonexistent/x"}))
 
     def test_wrappers_use_budgets(self):
         self.assertEqual((client.TIMEOUT_HOOK, client.TIMEOUT_MCP, client.TIMEOUT_CLI), (2.0, 5.0, 10.0))
@@ -174,7 +174,7 @@ class FailSoft(Base):
 class Tcp(Base):
     def test_tcp_with_token_loopback(self):
         s = self.serve(ok_handler, "tcp")
-        self.env.update(ENGRAM_PORT=str(s.port), ENGRAM_TOKEN="t" * 20)
+        self.env.update(ALETHEA_PORT=str(s.port), ALETHEA_TOKEN="t" * 20)
         self.assertTrue(client.call("ping", env=self.env)["ok"])
         self.assertEqual(s.seen[0]["token"], "t" * 20)
         self.assertEqual(s.seen[0]["verb"], "ping")
@@ -191,7 +191,7 @@ class Tcp(Base):
 
     def test_unix_down_falls_back_to_tcp(self):
         s = self.serve(ok_handler, "tcp")
-        self.env["ENGRAM_PORT"] = str(s.port)
+        self.env["ALETHEA_PORT"] = str(s.port)
         self.assertTrue(client.call("ping", env=self.env)["ok"])
 
     def test_token_not_sent_to_remote_host(self):
@@ -199,11 +199,11 @@ class Tcp(Base):
         orig = client._exchange
         client._exchange = lambda k, a, p, d: sent.append(p) or b'{"ok":true}'
         try:
-            self.env.update(ENGRAM_CONTAINER="1", ENGRAM_HOST="203.0.113.5", ENGRAM_PORT="9",
-                            ENGRAM_TOKEN="secret" * 4)
+            self.env.update(ALETHEA_CONTAINER="1", ALETHEA_HOST="203.0.113.5", ALETHEA_PORT="9",
+                            ALETHEA_TOKEN="secret" * 4)
             self.assertOffline(client.call("ping", env=self.env))
             self.assertEqual(sent, [])
-            self.env["ENGRAM_ALLOW_REMOTE_TOKEN"] = "1"
+            self.env["ALETHEA_ALLOW_REMOTE_TOKEN"] = "1"
             self.assertTrue(client.call("ping", env=self.env)["ok"])
             self.assertIn(b"secret", sent[0])
         finally:
@@ -211,11 +211,11 @@ class Tcp(Base):
 
     def test_auth_error_passthrough(self):
         s = self.serve(lambda c: c.sendall(b'{"ok":false,"error":"auth"}\n'), "tcp")
-        self.env["ENGRAM_PORT"] = str(s.port)
+        self.env["ALETHEA_PORT"] = str(s.port)
         self.assertEqual(client.call("ping", env=self.env)["error"], "auth")
 
     def test_token_never_in_offline_result(self):
-        self.env.update(ENGRAM_TOKEN="topsecrettopsecret", ENGRAM_PORT="1")
+        self.env.update(ALETHEA_TOKEN="topsecrettopsecret", ALETHEA_PORT="1")
         self.assertNotIn("topsecret", repr(client.call("ping", env=self.env)))
 
 
@@ -225,7 +225,7 @@ class ReplyAndTokenFile(Base):
             s = self.serve(lambda c, b=body: (c.sendall(b), c.close()))
             self.assertOffline(client.call("ping", env=self.env))
             s.close()
-            os.unlink(os.path.join(self.home, "engram.sock"))
+            os.unlink(os.path.join(self.home, "alethea.sock"))
 
     def _token_path(self, mode):
         p = os.path.join(self.home, "token")
@@ -278,14 +278,14 @@ class Autostart(Base):
             self.assertEqual(mode, 0o600, name)
 
     def test_noop_in_container_mode(self):
-        self.env["ENGRAM_CONTAINER"] = "1"
+        self.env["ALETHEA_CONTAINER"] = "1"
         t = time.monotonic()
         self.assertFalse(client.autostart(env=self.env, cmd=["/nonexistent"]))
         self.assertLess(time.monotonic() - t, 0.5)
         self.assertFalse(os.path.exists(os.path.join(self.home, "autostart.lock")))
 
     def test_noop_in_tcp_mode(self):
-        self.env["ENGRAM_PORT"] = "1"
+        self.env["ALETHEA_PORT"] = "1"
         self.assertFalse(client.autostart(env=self.env))
         self.assertFalse(os.path.exists(os.path.join(self.home, "autostart.lock")))
 
@@ -298,9 +298,9 @@ class Autostart(Base):
         with open(script, "w") as f:
             f.write(
                 "import os,socket,time\n"
-                "h=os.environ['ENGRAM_HOME']\n"
+                "h=os.environ['ALETHEA_HOME']\n"
                 "open(os.path.join(h,'spawned'),'a').write('x')\n"
-                "s=socket.socket(socket.AF_UNIX);s.bind(os.path.join(h,'engram.sock'));s.listen(4)\n"
+                "s=socket.socket(socket.AF_UNIX);s.bind(os.path.join(h,'alethea.sock'));s.listen(4)\n"
                 "s.settimeout(8)\n"
                 "end=time.time()+8\n"
                 "while time.time()<end:\n"

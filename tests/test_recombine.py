@@ -1,7 +1,7 @@
 import unittest
 
-from engram import consolidate
-from engram.cortex import Cortex
+from alethea import consolidate
+from alethea.cortex import Cortex
 
 BASE = "the build uses sqlite for local storage of memories"
 RELATED = "the build uses postgres for remote storage of memories"
@@ -34,7 +34,7 @@ class RecombineTest(unittest.TestCase):
         # identifier veto: same words but different identifiers must not look related
         self.c.insert("semantic", "see config in src/app/main.py for the setting")
         self.c.insert("semantic", "see config in src/app/other.py for the setting")
-        from engram.encode import similarity
+        from alethea.encode import similarity
         s = similarity("see config in src/app/main.py for the setting",
                        "see config in src/app/other.py for the setting")
         expected = 1 if consolidate.RECOMBINE_LO <= s <= consolidate.RECOMBINE_HI else 0

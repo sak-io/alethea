@@ -3,7 +3,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "engram-memory"  # PyPI name NOT confirmed; confirm before any publish
+name = "alethea"
 dynamic = ["version"]
 description = "Long-term memory for AI coding agents: local daemon, mnemo CLI, MCP server, Claude Code hooks (stdlib only)."
 readme = "README.md"
@@ -27,17 +27,20 @@ classifiers = [
     "Topic :: Software Development",
 ]
 
+[project.optional-dependencies]
+local = ["fastembed>=0.3"]  # opt-in local ONNX embedder (ALETHEA_EMBEDDER=fastembed:<model>)
+
 [project.urls]
 Repository = "https://github.com/sak-io/engram"
 
 [project.scripts]
-mnemo = "engram.cli:main"
-engram-daemon = "engram.daemon:main"
-engram-hook = "engram.hooks.engram_hook:main"
-engram-mcp = "engram.mcp_server:main"
+mnemo = "alethea.cli:main"
+alethea-daemon = "alethea.daemon:main"
+alethea-hook = "alethea.hooks.alethea_hook:main"
+alethea-mcp = "alethea.mcp_server:main"
 
 [tool.setuptools.dynamic]
-version = { attr = "engram.__version__" }
+version = { attr = "alethea.__version__" }
 
 [tool.setuptools.packages.find]
-include = ["engram*"]
+include = ["alethea*"]

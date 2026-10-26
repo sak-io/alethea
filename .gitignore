@@ -1,6 +1,6 @@
 __pycache__/
 *.pyc
-.engram/
+.alethea/
 *.db
 *.db-wal
 *.db-shm
@@ -8,3 +8,5 @@ dist/
 build/
 *.egg-info/
 .venv/
+.env
+.env.*

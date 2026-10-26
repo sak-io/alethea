@@ -1,8 +1,8 @@
-# Engram – Technical Details
+# Alethea – Technical Details
 
-A specification of Engram, written so the project can be built from this document. For the product rationale, see `product-concept.md`.
+A specification of Alethea, written so the project can be built from this document. For the product rationale, see `product-concept.md`.
 
-Every `ENGRAM_*` and `MNEMO_*` environment variable is listed in one table in [configuration.md](configuration.md); where this document names one, that table is authoritative for its default and implementation status.
+Every `ALETHEA_*` and `MNEMO_*` environment variable is listed in one table in [configuration.md](configuration.md); where this document names one, that table is authoritative for its default and implementation status.
 
 The numbers below (thresholds, weights, decay rates) are the reference starting values. Verify and tune them with tests.
 
@@ -18,7 +18,7 @@ The numbers below (thresholds, weights, decay rates) are the reference starting 
 ## 2. Layout
 
 ```
-engram/
+alethea/
   cortex.py        SQLite schema, decay/activation math, low-level storage API
   encode.py        salience scoring, novelty/dedup, classification, the encode() gate
   recall.py        retrieval: lexical+semantic fusion, spreading activation, briefing
@@ -28,16 +28,16 @@ engram/
   export.py        sync-back: render high-confidence memories to host-native markdown rules
   daemon.py        always-on process: socket server, verb dispatch, sleep timer
   client.py        thin fail-soft client used by hooks, MCP server, and mnemo
-  mcp_server.py    stdio JSON-RPC MCP server: recall/remember/reflect/forget/engram_status
-  hooks/engram_hook.py            involuntary pathway: SessionStart/UserPromptSubmit/Stop/SessionEnd/PreCompact
+  mcp_server.py    stdio JSON-RPC MCP server: recall/remember/reflect/forget/alethea_status
+  hooks/alethea_hook.py            involuntary pathway: SessionStart/UserPromptSubmit/Stop/SessionEnd/PreCompact
   scripts/
     mnemo                     CLI: status/up/sleep/recall/remember/forget/dump/export-rules
     test_e2e.py, test_hooks.py, test_concurrency.py, show_mcp.py
   integrations/
     claude-code/CLAUDE.snippet.md  directive telling the agent when to recall/remember
     cursor/mcp.json                MCP registration template
-    cursor/engram.mdc              always-apply rule telling Cursor when to recall/remember
-  .mcp.json                      registers the `engram` MCP server for Claude Code
+    cursor/alethea.mdc              always-apply rule telling Cursor when to recall/remember
+  .mcp.json                      registers the `alethea` MCP server for Claude Code
   (hook wiring)                  provided by the installed package: `mnemo install claude-code` (ADR 0009)
   Dockerfile, docker-compose.yml sidecar deployment (stdlib-only image, TCP mode)
 ```
@@ -64,7 +64,7 @@ Each kind has its own decay exponent (`DECAY` dict):
 - `mem_fts`: FTS5 virtual table (porter + unicode61 tokenizer) over content/gist/keywords, kept in sync by `AFTER INSERT/UPDATE/DELETE` triggers.
 - `edges`: directed association graph `(src, dst, kind, weight, created_at)`. On a repeated link, upsert with `weight = MIN(1.0, weight + 0.15)` (Hebbian strengthening). Edge kinds include `abstracts` and `recombined`.
 - `journal`: raw hippocampal buffer. Every observed turn is stored, with a `consolidated` flag that consolidation clears.
-- `sessions`, `engram_meta`: session records and key/value state (for example `last_downscale`, `last_sleep`).
+- `sessions`, `alethea_meta`: session records and key/value state (for example `last_downscale`, `last_sleep`).
 
 ### Activation (`Cortex.activation()`)
 
@@ -113,7 +113,7 @@ class Embedder(Protocol):
 ```
 
 - `HashedNgramEmbedder` is the default and the reference implementation.
-- Optional embedders (local ONNX/fastembed such as `all-MiniLM-L6-v2`, or a remote API) are selected by config (`ENGRAM_EMBEDDER`, env or config file) and loaded lazily, so the stdlib-only path never imports them.
+- Optional embedders (local ONNX/fastembed such as `all-MiniLM-L6-v2`, or a remote API) are selected by config (`ALETHEA_EMBEDDER`, env or config file) and loaded lazily, so the stdlib-only path never imports them.
 - Fail-soft: if the selected embedder is unavailable or raises (missing package, model not downloaded, network error), fall back to the hashed embedder for that call and log once. Lexical search keeps working regardless.
 - All vector consumers (`recall.candidates`, `novelty`, `similarity`, `recombine`) go through the protocol. Only compare vectors with matching `embedder_id`.
 - Changing embedder: new writes use the new one. Provide `mnemo reembed` to rewrite stored vectors in batches (resumable); until it completes, rows with a different `embedder_id` are served by the lexical channel only.
@@ -219,8 +219,8 @@ Other behavior:
 
    Pre-filter before ranking so the extractive pass is less fragile on coding transcripts: strip or collapse fenced code blocks, diffs, stack traces, and long terminal output (keep at most the final error line and the command that produced it), and split sentences on newlines and bullet markers as well as punctuation.
 
-   **Optional LLM-assisted pass** (off by default, `ENGRAM_LLM_CONSOLIDATE`). A `Distiller` protocol with the extractive implementation as default and fallback. An LLM distiller takes the episode and returns structured bullets (decision, cause, procedure, open issue), each typed so it can be classified into a kind. Two delivery modes:
-   - *Host-agent callback:* the daemon never calls a model itself. It queues episodes as pending-consolidation items. The next session's MCP server exposes them (an `engram_consolidate_pending` tool, or MCP sampling where the host supports it), and the host agent returns the synthesized bullets via `remember`. This keeps the daemon offline and key-free.
+   **Optional LLM-assisted pass** (off by default, `ALETHEA_LLM_CONSOLIDATE`). A `Distiller` protocol with the extractive implementation as default and fallback. An LLM distiller takes the episode and returns structured bullets (decision, cause, procedure, open issue), each typed so it can be classified into a kind. Two delivery modes:
+   - *Host-agent callback:* the daemon never calls a model itself. It queues episodes as pending-consolidation items. The next session's MCP server exposes them (an `alethea_consolidate_pending` tool, or MCP sampling where the host supports it), and the host agent returns the synthesized bullets via `remember`. This keeps the daemon offline and key-free.
    - *Direct API:* a configured provider endpoint, run only during idle sleep.
 
    Rules: the pass is best-effort and rate-limited. Any failure, timeout, or malformed output leaves the episode on the extractive path and is never an error to the session. LLM output is untrusted text: it goes through the normal `encode()` gate (novelty, dedup with the vetoes, thresholds), is capped in length, and is never executed or used to modify configuration. Episodes are marked `consolidated` only after a distiller succeeds, so they can be retried.
@@ -228,12 +228,12 @@ Other behavior:
    - Multiply all non-identity strength by `0.93 ^ periods`, where periods scale with wall-clock time elapsed (capped at 14 days' worth per call).
    - Archive anything whose activation falls below `ARCHIVE_ACTIVATION = -3.2`.
    - Hard-delete archived episodic memories with zero access count after `PRUNE_AFTER_DAYS = 45`.
-   - Rate-limit to once per 6 hours via `engram_meta.last_downscale`. Clamp a future or corrupted timestamp to 0 elapsed time. Without this gate, a daemon restart loop or clock skew can compress months of forgetting into seconds.
+   - Rate-limit to once per 6 hours via `alethea_meta.last_downscale`. Clamp a future or corrupted timestamp to 0 elapsed time. Without this gate, a daemon restart loop or clock skew can compress months of forgetting into seconds.
 4. **`recombine()`.** REM-like. Sample the top 60 semantic/procedural/identity memories by salience, compute pairwise cosine, and add a `recombined` edge for pairs in the band 0.34 <= sim <= 0.88 (clearly related, not near-duplicate). Cap at 40 new links per cycle.
 
 Triggers:
 
-- **Timer.** The daemon's `_sleep_loop` runs every `ENGRAM_SLEEP_INTERVAL = 900` s, and only after `ENGRAM_IDLE_SLEEP = 180` s of inactivity.
+- **Timer.** The daemon's `_sleep_loop` runs every `ALETHEA_SLEEP_INTERVAL = 900` s, and only after `ALETHEA_IDLE_SLEEP = 180` s of inactivity.
 - **Hooks.** `PreCompact` runs a sleep with `deep = False` (skip downscale and recombine). `SessionEnd` runs `consolidate_episodes` only.
 
 ## 8. Process architecture
@@ -244,7 +244,7 @@ The only writer. Newline-delimited JSON over a Unix socket. It falls back automa
 
 Verbs: `remember`, `recall`, `observe`, `briefing`, `reflect`, `forget`, `sleep`, `session_end`, `status`, `dump`, `ping`.
 
-An `Engram` class dispatches verbs to the encode/recall/consolidate modules behind one lock. A background `_sleep_loop` thread runs `sleep()` on the timer when idle.
+An `Alethea` class dispatches verbs to the encode/recall/consolidate modules behind one lock. A background `_sleep_loop` thread runs `sleep()` on the timer when idle.
 
 ### `client.py`
 
@@ -256,9 +256,9 @@ Every consumer (hooks, MCP server, `mnemo`) goes through it. The hard rule: **a 
 
 ### `mcp_server.py`
 
-A hand-rolled stdio JSON-RPC MCP server with no SDK dependency. It exposes `recall`, `remember`, `reflect`, `forget`, and `engram_status`, and forwards each to the daemon through `client.py`.
+A hand-rolled stdio JSON-RPC MCP server with no SDK dependency. It exposes `recall`, `remember`, `reflect`, `forget`, and `alethea_status`, and forwards each to the daemon through `client.py`.
 
-### `hooks/engram_hook.py`
+### `hooks/alethea_hook.py`
 
 The involuntary pathway, wired by the installed package (`mnemo install claude-code`, ADR 0009; this repo does not enable hooks itself) to `SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`, and `PreCompact`.
 
@@ -272,16 +272,16 @@ A CLI over `client.py` with subcommands `status`, `up`, `sleep`, `recall`, `reme
 
 ### Deployment
 
-Run the daemon directly, or as a Docker sidecar (stdlib-only image, TCP mode). `.mcp.json` registers the `engram` MCP server for Claude Code.
+Run the daemon directly, or as a Docker sidecar (stdlib-only image, TCP mode). `.mcp.json` registers the `alethea` MCP server for Claude Code.
 
 ### Host integrations (Claude Code, Cursor)
 
-Both hosts have native, hand-curated instruction files (`CLAUDE.md`; `.cursor/rules/*.mdc`, with `.cursorrules` as the legacy form). Engram does not replace or write into them. The division of labor:
+Both hosts have native, hand-curated instruction files (`CLAUDE.md`; `.cursor/rules/*.mdc`, with `.cursorrules` as the legacy form). Alethea does not replace or write into them. The division of labor:
 
 | Layer | Owner | Contents | Changes |
 | :---- | :---- | :---- | :---- |
 | Static ground truth | The user, in native files | Stack, style, build commands, guardrails | By hand, rarely |
-| Dynamic memory | Engram | Decisions, bug causes, procedures, preferences, identity | Reinforced and decayed automatically |
+| Dynamic memory | Alethea | Decisions, bug causes, procedures, preferences, identity | Reinforced and decayed automatically |
 
 **Capability matrix.** The two hosts do not offer the same pathways, so the integration degrades by capability rather than assuming parity:
 
@@ -290,7 +290,7 @@ Both hosts have native, hand-curated instruction files (`CLAUDE.md`; `.cursor/ru
 | Voluntary (MCP: recall/remember/reflect/forget) | `.mcp.json` | `.cursor/mcp.json` or `~/.cursor/mcp.json` |
 | Involuntary capture (observe every turn) | Lifecycle hooks | Cursor's hooks, if the installed version provides them; otherwise none (voluntary only) |
 | Session briefing | `SessionStart` hook | No `SessionStart` equivalent: delivered by the sync-back file, which an always-apply rule loads |
-| "When to consult Engram" directive | `CLAUDE.md` snippet | `engram.mdc` with `alwaysApply: true` |
+| "When to consult Alethea" directive | `CLAUDE.md` snippet | `alethea.mdc` with `alwaysApply: true` |
 
 Verify each host's current hook events and output schema against its docs before wiring; they change between versions.
 
@@ -299,19 +299,19 @@ Verify each host's current hook events and output schema against its docs before
 - The `CLAUDE.md` snippet is one sentence: call `recall` for unfamiliar domain logic, past architecture decisions, or earlier bug investigations; call `remember` when a decision is finalized or a non-obvious cause is found.
 
 **Cursor.**
-- `mcp.json` launches the stdlib MCP server by absolute path (`python3 /path/to/engram/mcp_server.py`), not `-m engram.mcp_server`, which needs the package on `PYTHONPATH`.
-- `engram.mdc` carries `description`, `alwaysApply: true`, and the same recall/remember directive. Use `.mdc` rules, not the legacy `.cursorrules`.
+- `mcp.json` launches the stdlib MCP server by absolute path (`python3 /path/to/alethea/mcp_server.py`), not `-m alethea.mcp_server`, which needs the package on `PYTHONPATH`.
+- `alethea.mdc` carries `description`, `alwaysApply: true`, and the same recall/remember directive. Use `.mdc` rules, not the legacy `.cursorrules`.
 - Without a `SessionStart` hook, the agent has no automatic briefing, so the sync-back file below is Cursor's briefing.
 
 **`repo_root` in the MCP server.** The "resolve in the hook process" rule in section 3 does not cover MCP calls, which arrive without hook context. `mcp_server.py` resolves `repo_root` itself from its own working directory at startup (and per call if the host passes a root), using `gitctx.py` and the same fail-soft rules. Both hosts, working in the same repo, therefore read and write the same memories.
 
 #### Sync-back: `mnemo export-rules`
 
-Renders a snapshot of Engram's strongest durable memories into a markdown file the host loads natively. One-way and regenerated, never merged.
+Renders a snapshot of Alethea's strongest durable memories into a markdown file the host loads natively. One-way and regenerated, never merged.
 
 - **Selection.** Active semantic and procedural memories for the current `repo_root`, ranked by activation, above a confidence floor (for example `access_count >= 2` or deliberate `remember`), capped at a small count and byte budget (for example 20 items, 4 KB) so it cannot bloat every prompt. Identity memories are excluded by default (see privacy).
-- **Targets.** `.cursor/rules/engram_learned.mdc` (with `alwaysApply: true` frontmatter) and `.claude/engram_learned.md`, which `CLAUDE.md` pulls in with an `@.claude/engram_learned.md` import.
-- **Whole-file ownership.** The file is entirely Engram's: a header says "auto-generated, do not edit", with the generation time. Each export overwrites it atomically (write temp, rename). Never edit inside a hand-written file.
+- **Targets.** `.cursor/rules/alethea_learned.mdc` (with `alwaysApply: true` frontmatter) and `.claude/alethea_learned.md`, which `CLAUDE.md` pulls in with an `@.claude/alethea_learned.md` import.
+- **Whole-file ownership.** The file is entirely Alethea's: a header says "auto-generated, do not edit", with the generation time. Each export overwrites it atomically (write temp, rename). Never edit inside a hand-written file.
 - **Staleness.** The export is a snapshot and does not decay on its own. Regenerate it on `SessionEnd` and after `sleep`, so a memory that has faded or been forgotten drops out on the next export. `forget` of an exported item should trigger a re-export.
 - **Privacy.** The default target is gitignored (`mnemo export-rules` adds the entry or warns), because memories can name people, incidents, and personal preferences. Committing the file to share with a team is an explicit opt-in, and identity memories are never written to a repo-level file.
 - **Untrusted text.** Exported content flows into an always-on prompt. Only memories that passed the `encode()` gate are eligible, each is length-capped, and exported text is rendered as plain list items, never as headings or fenced instructions.
@@ -326,9 +326,9 @@ Build in dependency order:
 3. `encode.py`: `amygdala`, `durability`, `novelty`, `similarity`, `classify`, `encode()`, `observe()`. Depends on `cortex` and `vectorize`. It has a deferred import of `recall.candidates`, done inside the function body and not at module level, because `recall` also depends on `cortex`.
 4. `recall.py`: `candidates()`, `spread()`, `recall()`, `briefing()`. Depends on `cortex` and `vectorize`.
 5. `consolidate.py`: `sleep_cycle()` and its stages. Depends on `cortex`, `vectorize`, and `encode` (reuses `classify`, `durability`, `encode`).
-6. `daemon.py`: socket server wrapping an `Engram` class.
+6. `daemon.py`: socket server wrapping an `Alethea` class.
 7. `client.py`: fail-soft client plus `autostart()`.
-8. `mcp_server.py`, `hooks/engram_hook.py`, `scripts/mnemo`: thin layers over `client.py` with no logic of their own. Build last.
+8. `mcp_server.py`, `hooks/alethea_hook.py`, `scripts/mnemo`: thin layers over `client.py` with no logic of their own. Build last.
 9. Tests throughout.
 
 Write the adversarial dedup tests **before** trusting any similarity-combination logic.
