@@ -439,7 +439,7 @@ class ThresholdsTest(Isolated):
     def test_declared_values_apply_to_the_declaring_id_only(self):
         inst = self.make(NEAR_DUPLICATE=0.97, SEM_GAIN=3.0)
         self.assertEqual(vectorize.tuning(inst.id, "SEM_GAIN", 1.8), 3.0)
-        self.assertEqual(vectorize.tuning("hashed-ngram-v1:512", "SEM_GAIN", 1.8), 1.8)
+        self.assertEqual(vectorize.tuning(vectorize.EMBEDDER_ID, "SEM_GAIN", 1.8), 1.8)
         self.assertEqual(vectorize.tuning("someone-else:1", "SEM_GAIN", 1.8), 1.8)
         self.assertEqual(enc.threshold("someone-else:1"), 0.88)
 
@@ -602,7 +602,7 @@ class MixedEmbedderRowsTest(Isolated):
         self.addCleanup(cx.close)
         base = "the billing service stores invoices in postgres and archives old rows nightly"
         rel = "the billing service archives invoices in postgres every night using a cron job"
-        cx.insert("semantic", base, embedder_id="hashed-ngram-v1:512")
+        cx.insert("semantic", base, embedder_id=vectorize.EMBEDDER_ID)
         cx.insert("semantic", rel, embedder_id="fake-dense-v1:384")
         self.assertEqual(consolidate.recombine(cx), 0)
 
@@ -617,7 +617,7 @@ class MixedEmbedderRowsTest(Isolated):
             enc.remember(cx, "The warehouse robots charge overnight in bay four")
         rows = cx.db.execute("SELECT embedder_id, length(vector)/4 FROM memories ORDER BY rowid").fetchall()
         self.assertEqual([tuple(r) for r in rows],
-                         [("hashed-ngram-v1:512", 512), ("fake-dense-v1:1536", 1536)])
+                         [("hashed-ngram-v2:512", 512), ("fake-dense-v1:1536", 1536)])
 
 
 class StatusAndDaemonTest(Isolated):
@@ -658,7 +658,7 @@ class StatusAndDaemonTest(Isolated):
         from alethea import mcp_server
         line = mcp_server.render_status(dict(vectorize.status(), total=0, journal_pending=0))
         self.assertNotIn("falling_back", line)
-        self.assertIn("embedder=hashed-ngram-v1:512", line)
+        self.assertIn("embedder=hashed-ngram-v2:512", line)
 
     def test_warn_reserved_flags_only_unknown_embedders(self):
         with mock.patch.object(daemon, "_reserved_warned", False):

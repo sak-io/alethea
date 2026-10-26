@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 SCHEMA_VERSION = 1
-HASH_SALT = b"engram-v1"
+HASH_SALT = b"alethea-v1"
 DOWNSCALE_INTERVAL_S = 6 * 3600
 MAX_REQUEST_BYTES = 1 << 20
 
@@ -32,18 +32,6 @@ DEFAULTS = {
 def home_dir(env=None):
     env = os.environ if env is None else env
     return Path(env.get("ALETHEA_HOME") or DEFAULTS["ALETHEA_HOME"]).expanduser()
-
-
-def legacy_home_hint(env=None):
-    """One-line hint when only the pre-rename data dir ~/.engram exists (never migrated automatically)."""
-    env = os.environ if env is None else env
-    if env.get("ALETHEA_HOME"):
-        return None
-    old, new = Path("~/.engram").expanduser(), Path(DEFAULTS["ALETHEA_HOME"]).expanduser()
-    if old.is_dir() and not new.exists():
-        return ("found the old data directory %s but not %s; this project was renamed from Engram. "
-                "Move it with `mv %s %s` or set ALETHEA_HOME=%s" % (old, new, old, new, old))
-    return None
 
 
 def ensure_private_dir(path):

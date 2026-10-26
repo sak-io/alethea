@@ -11,7 +11,7 @@ Sources: `[T§n]` = docs/technical-details.md, `[S Gn]` = docs/specs/alethea.md 
 | 4 | Four kinds with decay 0.5/0.2/0.1/0.0 | T§3 | Calibration: ADR 0003 |
 | 5 | ACT-R base-level activation + salience + recency | T§3 | Needs units/`n` definition: ADR 0003 |
 | 6 | `repo_root` = parent of git-common-dir, resolved in hook/MCP process, fail-soft, branch not in key | T§3 | none |
-| 7 | Hashed n-gram embedder (512-d, blake2b salt `engram-v1`), `Embedder` protocol, `embedder_id` stamping | T§4 | Weak on synonymy; accepted |
+| 7 | Hashed n-gram embedder (512-d, blake2b salt `alethea-v1`), `Embedder` protocol, `embedder_id` stamping | T§4 | Weak on synonymy; accepted |
 | 8 | `similarity = max(cosine, jaccard)`, identifier veto x0.55, negation/antonym veto, `NEAR_DUPLICATE=0.88`, bias to false negatives | T§4,§5 | Highest-risk logic; adversarial tests first |
 | 9 | Encode gate: amygdala, durability, novelty (1-best_sim), classify, thresholds as stated | T§5 | Marker lists defined by developer (G23) |
 | 10 | Fused recall (lexical bm25 rank-normalized, semantic over recency pool, 2-hop spread), activation modulates relevance only | T§6 | none |

@@ -9,6 +9,7 @@ description = "Long-term memory for AI coding agents: local daemon, mnemo CLI, M
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
+authors = [{ name = "sak-io" }]
 dependencies = []
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -31,7 +32,7 @@ classifiers = [
 local = ["fastembed>=0.3"]  # opt-in local ONNX embedder (ALETHEA_EMBEDDER=fastembed:<model>)
 
 [project.urls]
-Repository = "https://github.com/sak-io/engram"
+Repository = "https://github.com/sak-io/alethea"
 
 [project.scripts]
 mnemo = "alethea.cli:main"

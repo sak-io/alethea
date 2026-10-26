@@ -25,7 +25,7 @@ Claude Code hooks (T22), the Claude Code installer and packaging (part of T30) a
 **Not on PyPI yet** (the distribution name `alethea` was verified free on 2026-10-24; see [docs/traction-checklist.md](docs/traction-checklist.md)). Until it is published, install from a checkout or a built wheel:
 
 ```sh
-git clone https://github.com/sak-io/engram && cd engram     # repository URL not yet verified; see the checklist
+git clone https://github.com/sak-io/alethea && cd alethea
 python3 -m pip wheel . --no-deps -w dist                       # builds dist/alethea-<version>-py3-none-any.whl
 python3 -m venv .venv && .venv/bin/pip install dist/alethea-*.whl
 export PATH="$PWD/.venv/bin:$PATH"                             # puts mnemo, alethea-daemon, alethea-hook, alethea-mcp on PATH

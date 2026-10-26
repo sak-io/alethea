@@ -23,14 +23,16 @@ HIT_BOOST, SPREAD_BOOST = 0.6, 0.35
 SPREAD_TOP, SPREAD_DAMP = 3, 0.5
 # Relevance floors (tuned on tests/data/recall_corpus.py plus the off-topic negatives in
 # tests/test_recall_regression.py; tests/data/recall_heldout.py was never tuned against).
-# Measured: unrelated-pair cosines max 0.26 on the hashed n-gram embedder, related pairs
-# median 0.70 with ~7% below 0.30. So a hit counts as "semantic" at cosine >= SEM_MIN_COS.
+# Measured on the hashed n-gram embedder (docs/architecture/lessons.md, ADR 0014): the tail of
+# unrelated cue/memory cosines depends on the hash salt; 0.30 let one off-topic cue through under
+# the shipped salt (core cosine 0.314) and leaked in 11% of 200 random salts, 0.35 in 3%, with no
+# recall change. So a hit counts as "semantic" at cosine >= SEM_MIN_COS.
 # FTS ranks are normalised (the top full-text hit always has lex 1.0 however weak), so a
 # lexical hit is judged on how much of the cue it covers instead: the matched fraction of
 # distinct non-stopword cue stems must reach LEX_MIN_COVER (all of them for cues of
 # <= LEX_ALL_UP_TO stems). A hit passes if EITHER test passes. encode's dedup path calls
 # candidates(relevance_floor=False) and sees every neighbour.
-SEM_MIN_COS = 0.30
+SEM_MIN_COS = 0.35  # hashed n-gram embedder; plugin embedders declare their own (default 0.30)
 REL_MIN = W_SEM * min(1.0, SEM_MIN_COS * SEM_GAIN)  # equivalent relevance floor
 LEX_MIN_COVER, LEX_ALL_UP_TO = 0.3, 0
 # Same-repo soft boost: multiplies the score; activation/relevance still dominate.

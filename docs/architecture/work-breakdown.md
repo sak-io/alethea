@@ -29,7 +29,7 @@ Verify: `python3 -m unittest tests.test_dedup_adversarial -v` (skips until T07; 
 ### T03 vectorize: stemmer, hashed embedder, cosine/jaccard, Embedder protocol [lib] tier N
 Goal: R8/R9 foundation, no internal deps.
 Files: `alethea/vectorize.py`, `tests/test_vectorize.py`.
-Details: 512-d, unigram 1.0, bigram 0.5, 4-gram 0.12, blake2b salt `engram-v1`, L2-normalized, `array('f')` bytes; `stem()` plural first then longest suffix (aligned with porter in FTS5 on a fixture list); `id = "hashed-ngram-v1:512"`; tokenizer shared with jaccard and veto (no length floor). Test determinism across subprocesses with different `PYTHONHASHSEED`; related 0.3-0.45, unrelated near 0.
+Details: 512-d, unigram 1.0, bigram 0.5, 4-gram 0.12, blake2b salt `alethea-v1`, L2-normalized, `array('f')` bytes; `stem()` plural first then longest suffix (aligned with porter in FTS5 on a fixture list); `id = "hashed-ngram-v2:512"`; tokenizer shared with jaccard and veto (no length floor). Test determinism across subprocesses with different `PYTHONHASHSEED`; related 0.3-0.45, unrelated near 0.
 Reqs: R8, R9. Needs: T01.
 Verify: `python3 -m unittest tests.test_vectorize -v`
 

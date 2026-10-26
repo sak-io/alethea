@@ -11,7 +11,7 @@ import os
 import sys
 import time
 
-from alethea import client, config, gitctx
+from alethea import client, gitctx
 
 EXIT_OK, EXIT_ERROR, EXIT_USAGE, EXIT_OFFLINE, EXIT_NA = 0, 1, 2, 3, 4
 EPILOG = ("exit codes: 0 ok, or daemon offline / not yet available (one-line note on "
@@ -241,9 +241,6 @@ def _fmt_reembed_line(re_):
 
 
 def cmd_status(args):
-    hint = config.legacy_home_hint()
-    if hint:
-        _err(hint)
     r = client.cli_call("status")
     if r.get("offline") and not args.json:
         _err("daemon: down (start it with `mnemo up`)")

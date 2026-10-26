@@ -1,7 +1,7 @@
 """Recall regression gate (T21): corpus precision/recall, relevance floor, scope, spread.
 
 Measured on the committed corpus (tests/data/recall_corpus.py, 43 cues, 80 memories
-incl. 20 near-miss distractors): recall@3 0.953, top-1 0.884; untuned held-out split
+incl. 20 near-miss distractors): recall@3 0.953, top-1 0.907 (hash salt alethea-v1, ADR 0014); untuned held-out split
 (tests/data/recall_heldout.py, 30 cues) 0.833; 0 of 19 off-topic/nonsense cues return anything.
 Gates sit just under those so a real regression fails.
 """

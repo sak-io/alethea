@@ -27,7 +27,7 @@ Non-goals `[C§8]`: multi-tenancy, audit logging, tenant policy, funded/commerci
 - **R7 Fail-soft git** `[T§3]`. Given no `git` binary, a non-repo dir, or a >1 s timeout, Then `repo_root=NULL`, no exception, session unaffected; results cached per cwd.
 
 ### Embedding and similarity
-- **R8 Hashed n-gram embedder** `[T§4]`. Then vectors are 512-dim, L2-normalized, built from stemmed unigrams (1.0), bigrams (0.5), 4-char-grams (0.12) with blake2b salt `engram-v1`; the same text yields identical bytes across processes with different `PYTHONHASHSEED`; related text ≈0.3-0.45 cosine, unrelated ≈0.
+- **R8 Hashed n-gram embedder** `[T§4]`. Then vectors are 512-dim, L2-normalized, built from stemmed unigrams (1.0), bigrams (0.5), 4-char-grams (0.12) with blake2b salt `alethea-v1`; the same text yields identical bytes across processes with different `PYTHONHASHSEED`; related text ≈0.3-0.45 cosine, unrelated ≈0.
 - **R9 Embedder protocol + stamping** `[T§4]`. Then every vector row has `embedder_id`; vectors with differing ids are never compared (assert in a mixed-id test).
 - **R10 Similarity safety** `[C§5.2,T§5 Similarity]`. Then `similarity=max(cosine,jaccard)` (never blend); identifier veto (digit, path separator, camelCase in symmetric difference, no token length floor) multiplies by 0.55; `NEAR_DUPLICATE=0.88`. Adversarial suite (swapped entities, negation, swapped identifiers, true restatement) merges **only** the true restatement. Suite written before similarity code.
 - **R11 Negation/antonym veto** `[T§4]`. Given "enable auth" vs "disable auth" (also allow/deny, add/remove, negators), Then similarity is damped below `NEAR_DUPLICATE` under every shipped embedder.
