@@ -1,6 +1,6 @@
 # API reference
 
-Three surfaces over one daemon: the wire protocol (daemon verbs), the MCP tools, and the `mnemo` CLI. All limits below are read from the code (`alethea/daemon.py`, `alethea/mcp_server.py`, `alethea/cli.py`); the drift guard `tests/test_docs_api.py` fails if a daemon verb, MCP tool or `mnemo` subcommand is missing from this file. How the pieces fit: [architecture.md](architecture.md). Configuration: [configuration.md](configuration.md).
+Three surfaces over one daemon: the wire protocol (daemon verbs), the MCP tools, and the `mnemo` CLI. All limits below are read from the code (`alethea/daemon.py`, `alethea/mcp_server.py`, `alethea/cli.py`); the drift guard `tests/test_docs_api.py` fails if a daemon verb, MCP tool or `mnemo` subcommand is missing from this file. How the pieces fit: [architecture.md](../architecture/overview.md). Configuration: [configuration.md](configuration.md).
 
 ## 1. Wire protocol
 
@@ -11,7 +11,7 @@ Transports (`alethea/daemon.py: Server`):
 | Transport | Address | Auth |
 |---|---|---|
 | Unix socket | `<ALETHEA_HOME>/alethea.sock` (0600, directory 0700) | none (filesystem permissions) |
-| TCP (optional) | `127.0.0.1:<port>`, or `ALETHEA_BIND`; recorded in `<ALETHEA_HOME>/daemon.json` | every request must carry `"token"`; see [threat-model.md](threat-model.md) |
+| TCP (optional) | `127.0.0.1:<port>`, or `ALETHEA_BIND`; recorded in `<ALETHEA_HOME>/daemon.json` | every request must carry `"token"`; see [threat-model.md](../architecture/threat-model.md) |
 
 Transport limits: request line max 1 MiB; first byte within 1.5 s, whole line within 5 s; at most 64 requests executing at once (`busy` otherwise); the client treats a reply over 8 MiB as a failure. The client library (`alethea/client.py`) never raises: any failure becomes `{"ok": false, "offline": true}` (`offline` is added by the client, never sent by the daemon).
 
@@ -58,7 +58,7 @@ Returned by `recall` and `dump`: `id, kind, content, gist, keywords, salience, s
 | `distill_submit` | `episode_id` (required, max 32); `bullets` (list of strings) | `{ok, accepted, created, merged, consolidated, rejected?, replayed?}` | the two errors of `pending`; whole-request validation messages (`bullets must be a list of strings`, `too many bullets (max 6)`, `bullet N too long (max 300 chars)`, `bullet N must be a non-empty string`, ...); `episode_id must be an id returned by pending`; `unknown, expired or already consolidated episode`; `episode was not listed by pending`; `rate limit reached; try again later` |
 | `reembed` | `action` (required): `plan`, `start`, `status`, `cancel`. For `start`: `confirm` (boolean), `batch` (1..64, default 32), `include_identity` (boolean) | `plan`: `{ok, action, target, ready, reason, remote, host, model, memories, chars, identity_excluded, needs_confirm, item_char_cap, with_identity}`; `start`/`status`/`cancel`: `{ok, action, reembed: {state, target, done, total, cursor, rate_per_s, eta_s, last_error, include_identity, batch, failures, active}}` | `action must be one of: plan, start, status, cancel`; `embedder not ready: <reason>`; `confirmation required: memory text would be sent to <host>`; `a reembed run is already in progress` |
 
-Embedder ids: `embedder_id` is `hashed-ngram-v2:512` for the built-in embedder. The number versions the vector algorithm (salt and features); a database written by an older build (`hashed-ngram-v1:512`, development databases only) keeps working, but those rows are reachable by the lexical channel only, never compared with current vectors and never merged with current rows, until `reembed` rewrites them (see docs/configuration.md). An explicit retired id passed to a verb is answered with current vectors under the current id.
+Embedder ids: `embedder_id` is `hashed-ngram-v2:512` for the built-in embedder. The number versions the vector algorithm (salt and features); a database written by an older build (`hashed-ngram-v1:512`, development databases only) keeps working, but those rows are reachable by the lexical channel only, never compared with current vectors and never merged with current rows, until `reembed` rewrites them (see docs/reference/configuration.md). An explicit retired id passed to a verb is answered with current vectors under the current id.
 
 Activity bookkeeping: every verb except `ping`, `status`, `export_rules` and `reembed` with action `status` or `plan` resets the idle timer and marks "something happened since the last sleep" (the automatic sleep cycle only runs after `ALETHEA_IDLE_SLEEP` seconds of inactivity, at least `ALETHEA_SLEEP_INTERVAL` apart, and only if there was activity).
 

@@ -1,7 +1,7 @@
 # ADR 0001: Owner technical choices (adopted as given)
 
 Status: Accepted (given by owner)
-Sources: `[T§n]` = docs/technical-details.md, `[S Gn]` = docs/specs/alethea.md gaps. Alternatives are noted only where the architect sees real risk.
+Sources: `[T§n]` = docs/architecture/technical-details.md, `[S Gn]` = docs/specs/alethea.md gaps. Alternatives are noted only where the architect sees real risk.
 
 | # | Decision | Source | Note / risk |
 |---|---|---|---|
