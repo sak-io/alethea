@@ -3,7 +3,7 @@
 Status: Accepted (T25; revised after review: the first version held the engine lock across embedder calls)
 
 ## Context
-The default embedder is a hashed n-gram projection; semantic paraphrases miss. `docs/technical-details.md` section 4 makes the `Embedder` a first-class plugin that must never cost the zero-dependency default, must never break the daemon, and must not weaken duplicate safety (a false merge is silent and permanent). The overriding project rule is that a broken memory must never break the session (hooks have a 2 s budget).
+The default embedder is a hashed n-gram projection; semantic paraphrases miss. `docs/architecture/technical-details.md` section 4 makes the `Embedder` a first-class plugin that must never cost the zero-dependency default, must never break the daemon, and must not weaken duplicate safety (a false merge is silent and permanent). The overriding project rule is that a broken memory must never break the session (hooks have a 2 s budget).
 
 An embedder is code outside our control: loading can download for minutes and sleep in the library's own retry loop (measured 40 s with the model hub blocked), a call can be slow or hang forever. The first implementation ran these calls under the global FairLock; a 6 s embedder made `status` and `recall` hit the 2 s hook budget and return offline, and a hung one would have blocked the daemon forever. That design is rejected.
 

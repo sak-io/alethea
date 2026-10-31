@@ -17,7 +17,7 @@ For the maintainer. Nothing here has been done on your behalf: no publish, no pu
 |---|---|
 | Wheel builds (`pip wheel . --no-deps`) and installs into a clean venv on Python 3.13; all four entry points are installed | verified 2026-10-23 |
 | README quickstart, every command, from the built wheel in a clean venv with a temporary `HOME` and `ALETHEA_HOME` | verified 2026-10-23 (outputs in the T31 report) |
-| Daemon wire protocol: error replies listed in `docs/api.md` were produced by a live daemon over the Unix socket and over TCP (`auth`, `unauthorized`) | verified 2026-10-23 |
+| Daemon wire protocol: error replies listed in `docs/reference/api.md` were produced by a live daemon over the Unix socket and over TCP (`auth`, `unauthorized`) | verified 2026-10-23 |
 | `docker build` of the `Dockerfile`, then `docker run` with the compose hardening (read-only root, `--cap-drop ALL`, `no-new-privileges`, volume at `/data`, token from the environment): container reaches `healthy`, runs as uid 10001, `mnemo status --strict`, `remember` and `recall` work inside it, data survives `docker restart`, refuses to start without a token or with a short one (exit 2) | verified 2026-10-23, **with limits**: the sandbox daemon had no network bridge, so the build ran with `--network none` and the container with `--network none`; `docker compose`, the published `127.0.0.1:47600` port and a host-side client over that port were NOT exercised |
 | Full unit/integration suite on Python 3.13 and 3.9 | see the T31 report and `docs/architecture/status.md` |
 
@@ -36,7 +36,7 @@ For the maintainer. Nothing here has been done on your behalf: no publish, no pu
 | 13 | **Permission-denied tests** | Skipped because the sandbox ran as root. | Run the suite as a normal user. |
 | 14 | **CI on `main`** | The workflow (Python 3.9, 3.11, 3.13, 3.14 and the wheel `package` job) has not run on GitHub for this branch. | Check the first run after merging. |
 | 15 | **Security scan** | No SCA / SAST / secret-scan report exists. The package has no runtime dependencies; the `fastembed` extra does. | Run the `security-auditor` (`/security-scan`) and a secret scan before publishing. |
-| 16 | **Human code review** | Every review so far was by AI agents. | See `docs/review-guide.md`. |
+| 16 | **Human code review** | Every review so far was by AI agents. | See `docs/project/review-guide.md`. |
 | 17 | **Scale and soak** | Write cost measured to 20k memories on a loaded sandbox; larger stores and long-lived daemons untested. | `scripts/bench_write.py`, `ALETHEA_PERF=1`. |
 
 ## 4. Signals to watch after announcing

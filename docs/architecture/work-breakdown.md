@@ -1,6 +1,6 @@
 # Alethea: Work Breakdown (task cards)
 
-Each card is the whole brief. Read `docs/architecture/lessons.md` first. Tier S = full review loop (max 2 rounds); tier N = single light review. Size target < 400 changed lines. Tests: stdlib `unittest` only, in `tests/` (e2e/hook/concurrency scripts in `scripts/`). Run from repo root. Reqs = ids in docs/specs/alethea.md; `T§` = docs/technical-details.md. Full suite: `python3 -m unittest discover -s tests -t .`.
+Each card is the whole brief. Read `docs/architecture/lessons.md` first. Tier S = full review loop (max 2 rounds); tier N = single light review. Size target < 400 changed lines. Tests: stdlib `unittest` only, in `tests/` (e2e/hook/concurrency scripts in `scripts/`). Run from repo root. Reqs = ids in docs/specs/alethea.md; `T§` = docs/architecture/technical-details.md. Full suite: `python3 -m unittest discover -s tests -t .`.
 
 Tags: `[lib]` engine, `[proc]` daemon/client, `[host]` host integration, `[plug]` optional.
 
@@ -235,7 +235,7 @@ Verify: `python3 -m unittest tests.test_installer -v`
 
 ### T31 Release docs and final checks [plug] tier N
 Goal: finish docs and cross-checks.
-Files: `docs/architecture/architecture.md`, `docs/architecture/threat-model.md`, `docs/architecture/api.md` (consolidated from plan + code), `README.md`, `docs/traction-checklist.md` (doc only), MCP-only note for Codex/Gemini/Grok (G1).
+Files: `docs/architecture/architecture.md`, `docs/architecture/threat-model.md`, `docs/architecture/api.md` (consolidated from plan + code), `README.md`, `docs/project/traction-checklist.md` (doc only), MCP-only note for Codex/Gemini/Grok (G1).
 Details: README quickstart verified by running its commands; api.md lists every verb and error; update `status.md`.
 Reqs: G1, G20, G26, R1. Needs: T21, T24, T28, T30 (T25-T27 optional).
 Verify: `python3 -m unittest discover -s tests -t . && python3 -m unittest discover -s scripts -p "test_*.py" -t .`

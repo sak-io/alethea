@@ -3,7 +3,7 @@ tools: [claude-code]  # claude-code | claude-app | cursor | copilot | gemini-cli
 team: [starter]  # one or more of: starter, web-product, api-backend, mobile, ai-product, data-ml, platform, toolsmith, makers
 roles_add: [architect, qa-engineer]  # extra roles on top of the team(s), e.g. [qa-engineer, technical-writer]
 roles_remove: []           # roles to drop, e.g. [ux-designer]
-sources: [docs/product-concept.md, docs/technical-details.md]  # owner documents the team treats as authoritative, e.g. [docs/product-concept.md, docs/technical-plan.md]
+sources: [docs/product/product-concept.md, docs/architecture/technical-details.md]  # owner documents the team treats as authoritative, e.g. [docs/product-concept.md, docs/technical-plan.md]
 role_models: [pr-reviewer=sonnet, qa-engineer=sonnet, security-auditor=sonnet, requirements-analyst=sonnet]  # token budget: mid-tier for review/QA/audit per docs/lean-orchestration.md
 git_mode: session-branch  # session-branch (commit on the session branch, local worktrees, no extra remote branches/PRs) | pr-per-task
 archetypes: [library-cli]  # what you are building (see .autocraft/archetypes/README.md), e.g. [fullstack-app, ai-assistant]

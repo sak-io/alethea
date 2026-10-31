@@ -40,4 +40,4 @@ mnemo status
 - There is no TLS. Never publish the port on a non-loopback address; for remote use put an SSH tunnel or VPN in front. The client refuses to send the token to a non-loopback host unless `ALETHEA_ALLOW_REMOTE_TOKEN` is set (plaintext).
 - The token is an environment variable of the container: `docker inspect` and `/proc/<pid>/environ` show it to anyone with access to the docker socket (effectively root). The daemon also accepts a `0600` file `<ALETHEA_HOME>/token`, which is not used by the compose file. Never bake it into an image or build argument (a static test forbids `ALETHEA_TOKEN` in `ENV`/`ARG`).
 - Failed auth attempts are rate limited by the daemon; requests are capped at 1 MiB per line (ADR 0004).
-- Remote embedder/LLM keys (`ALETHEA_LLM_API_KEY`, etc.) are not passed by the compose file; add them to `environment:` deliberately if you opt in, and note the privacy warnings in `docs/configuration.md`.
+- Remote embedder/LLM keys (`ALETHEA_LLM_API_KEY`, etc.) are not passed by the compose file; add them to `environment:` deliberately if you opt in, and note the privacy warnings in `docs/reference/configuration.md`.

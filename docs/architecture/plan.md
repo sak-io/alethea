@@ -1,6 +1,6 @@
 # Alethea: Architecture Plan (adopt mode)
 
-Status: DRAFT for owner + principal-engineer review. Inputs: docs/specs/alethea.md, docs/technical-details.md (`T§`). Owner choices: ADR 0001. New decisions: ADRs 0002-0005.
+Status: DRAFT for owner + principal-engineer review. Inputs: docs/specs/alethea.md, docs/architecture/technical-details.md (`T§`). Owner choices: ADR 0001. New decisions: ADRs 0002-0005.
 
 ## 1. Modules and dependencies (build order = T§9)
 

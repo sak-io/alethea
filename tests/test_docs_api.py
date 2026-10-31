@@ -1,4 +1,4 @@
-"""Drift guard for docs/api.md: every daemon verb, MCP tool, `mnemo` subcommand and fixed daemon
+"""Drift guard for docs/reference/api.md: every daemon verb, MCP tool, `mnemo` subcommand and fixed daemon
 error message in the code must be documented, and the review guide must list the new docs."""
 import os
 import re
@@ -7,7 +7,7 @@ import unittest
 from alethea import cli, daemon, mcp_server
 from tests.daemon_helpers import ROOT
 
-API = os.path.join(ROOT, "docs", "api.md")
+API = os.path.join(ROOT, "docs", "reference", "api.md")
 DAEMON_SRC = os.path.join(ROOT, "alethea", "daemon.py")
 # Messages that exist in the source but are deliberately not part of the contract.
 UNDOCUMENTED_OK = {"unsupported"}  # `UNSUPPORTED` is an empty tuple: no verb can be rejected this way
@@ -30,7 +30,7 @@ class DocsApiDriftTest(unittest.TestCase):
         self.assertGreaterEqual(len(verbs), 14)
         table = _section(_api(), "### Verbs", "## 2.")
         for v in verbs:
-            self.assertIn("| `%s` |" % v, table, "daemon verb %r missing from docs/api.md" % v)
+            self.assertIn("| `%s` |" % v, table, "daemon verb %r missing from docs/reference/api.md" % v)
 
     def test_verb_table_has_no_stale_verbs(self):
         table = _section(_api(), "### Verbs", "Activity bookkeeping")
@@ -42,7 +42,7 @@ class DocsApiDriftTest(unittest.TestCase):
         tools = set(mcp_server.TOOLS) | {"alethea_consolidate_pending", "alethea_distill_submit"}
         section = _section(_api(), "## 2. MCP server", "## 3.")
         for t in tools:
-            self.assertIn("| `%s` |" % t, section, "MCP tool %r missing from docs/api.md" % t)
+            self.assertIn("| `%s` |" % t, section, "MCP tool %r missing from docs/reference/api.md" % t)
         listed = set(re.findall(r"^\| `([a-z_]+)` \|", section, re.M))
         self.assertEqual(listed, tools)
 
@@ -50,7 +50,7 @@ class DocsApiDriftTest(unittest.TestCase):
         section = _section(_api(), "### Commands", "## 4.")
         for name in cli.COMMANDS:
             self.assertTrue(re.search(r"^\| `%s[ `]" % re.escape(name), section, re.M),
-                            "mnemo %s missing from docs/api.md" % name)
+                            "mnemo %s missing from docs/reference/api.md" % name)
 
     def test_every_mnemo_exit_code_is_documented(self):
         section = _section(_api(), "### Exit codes", "### Commands")
@@ -66,13 +66,14 @@ class DocsApiDriftTest(unittest.TestCase):
         self.assertIn("unknown verb", found)
         api = _api()
         for msg in sorted(found - UNDOCUMENTED_OK):
-            self.assertIn(msg, api, "daemon error %r missing from docs/api.md" % msg)
+            self.assertIn(msg, api, "daemon error %r missing from docs/reference/api.md" % msg)
 
     def test_new_docs_are_in_the_review_guide(self):
-        with open(os.path.join(ROOT, "docs", "review-guide.md"), encoding="utf-8") as f:
+        with open(os.path.join(ROOT, "docs", "project", "review-guide.md"), encoding="utf-8") as f:
             guide = f.read()
-        for doc in ("docs/architecture.md", "docs/api.md", "docs/threat-model.md",
-                    "docs/traction-checklist.md"):
+        for doc in ("docs/architecture/overview.md", "docs/reference/api.md",
+                    "docs/architecture/threat-model.md",
+                    "docs/project/traction-checklist.md"):
             self.assertIn(doc, guide)
             self.assertTrue(os.path.exists(os.path.join(ROOT, doc)))
 

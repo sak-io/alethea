@@ -19,7 +19,7 @@ Symptoms: the same decision or fact shows up twice in `mnemo dump` / briefing, o
 Trace it:
 1. `mnemo status` prints `dedup window: 2000 newest rows   cap ACTIVE|inactive   stored while capped: N`. If the cap is **inactive** (store at or under the window), this ADR is not the cause.
 2. Every memory created while the cap was active carries `meta.dedup_window_capped = <window in force>` (visible in `mnemo dump --json`; also in the `remember` / `observe` result as `dedup_window_capped`). Only those can be cap-induced second copies.
-3. Test the hypothesis: start the daemon with `ALETHEA_DEDUP_FTS_WINDOW=1000000` (see `docs/configuration.md`). If the duplicate then reinforces instead of being stored twice, the cap was the cause.
+3. Test the hypothesis: start the daemon with `ALETHEA_DEDUP_FTS_WINDOW=1000000` (see `docs/reference/configuration.md`). If the duplicate then reinforces instead of being stored twice, the cap was the cause.
 
 ## If we change it
 Raise `DEDUP_FTS_WINDOW` (or set the env var) and re-measure with `scripts/bench_write.py` (per-write cost by corpus size). Alternatives considered: an in-memory vector index or an inverted-index prefilter that keeps exactness at any size (more code, more state to keep consistent with the DB); a sleep-time "merge old duplicates" pass (needs the same veto rules and a safe merge story). Neither is built.

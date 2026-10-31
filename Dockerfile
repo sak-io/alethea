@@ -1,4 +1,4 @@
-# Alethea sidecar: the daemon in container mode (TCP only, token mandatory). See docs/docker.md.
+# Alethea sidecar: the daemon in container mode (TCP only, token mandatory). See docs/guides/docker.md.
 # Stdlib-only: no pip install, no third-party packages, no build stage needed.
 FROM python:3.13-slim
 
