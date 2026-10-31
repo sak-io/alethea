@@ -1,5 +1,7 @@
 # Alethea – Product Concept
 
+> This is the owner's internal design thesis and a source document for the project. For the plain-language version written for outsiders, see [What is Alethea](what-is-alethea.md).
+
 ## 1. What it is
 
 Alethea is a long-term memory system for AI coding agents (Claude Code, Cursor, Codex, Gemini, Grok). It is deliberately modeled on human memory architecture rather than built as a vector-store CRUD app.

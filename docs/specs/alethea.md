@@ -1,6 +1,6 @@
 # Alethea: Requirements Spec
 
-Sources: `[C§n]` = docs/product-concept.md, `[T§n]` = docs/technical-details.md. Source text is not restated; read the cited section. Numeric values are the reference starting values `[T preamble]`: tests assert the stated values but they stay configurable constants.
+Sources: `[C§n]` = docs/product/product-concept.md, `[T§n]` = docs/architecture/technical-details.md. Source text is not restated; read the cited section. Numeric values are the reference starting values `[T preamble]`: tests assert the stated values but they stay configurable constants.
 
 ## 1. Goal, actors, archetype
 Single-user, open-source, offline-first long-term memory for AI coding agents, modeled on human memory `[C§1,§3,§8]`. Archetype: library-cli (+ daemon, MCP server, hooks). Actors: **Developer** (human user), **Agent** (Claude Code, Cursor; Codex/Gemini/Grok via MCP only), **Host hook** (lifecycle events), **Operator** (runs daemon/Docker).

@@ -6,14 +6,19 @@ The name: Alethea comes from the Greek *aletheia*, "un-forgetting" (the opposite
 
 Each AI session keeps its own context window. Alethea is the layer that survives after the session ends: it remembers what mattered, abstracts specifics into durable facts, and lets the rest fade. It is a local daemon with a SQLite store, a command-line tool (`mnemo`) and an MCP server.
 
-- Pure Python standard library plus SQLite. No runtime dependencies; by default no network calls and no embedding API (remote embedding and LLM distillation exist but are off and need explicit opt-in).
+**In five lines:**
+
+1. A local daemon with one SQLite file; `mnemo` CLI, an MCP server and Claude Code hooks talk to it.
+2. It stores four kinds of memory (episodic, semantic, procedural, identity) that fade at different rates and get stronger each time they are recalled.
+3. A background "sleep cycle" summarises sessions, archives what has faded and links related memories.
+4. Pure Python standard library plus SQLite; by default no network calls and no embedding API (remote embedding and LLM distillation exist but are off and need explicit opt-in).
+5. Stored text is secret-redacted and rendered as inert data before it reaches a model.
+
 - MCP-capable hosts (Claude Code, Cursor, ...) can call the `recall`, `remember`, `reflect`, `forget` and `alethea_status` tools voluntarily today. Claude Code hooks ship with the installed package: `mnemo install claude-code` journals prompts and replies and injects a briefing at session start (see `integrations/claude-code/README.md`). This source repo does NOT enable hooks (`docs/adr/0009-hooks-ship-with-the-package.md`), so cloning it never journals your sessions.
 
 ## Status
 
-Built and tested: the core engine (storage, encode gate and dedup, recall, activation and decay, consolidation and sleep cycle, redaction), the daemon (Unix socket, optional token-authenticated TCP), the fail-soft client, the stdio MCP server and the `mnemo` CLI.
-
-Claude Code hooks (T22), the Claude Code installer and packaging (part of T30) and `export-rules` sync-back (T24) are built. The remote OpenAI-compatible embedder and `mnemo reembed` (T26) are built but verified only against stub servers (no real provider was contacted). Optional LLM-assisted consolidation (T27, off by default; host-callback mode, or direct API with `ALETHEA_LLM_API`) is built and stub-tested only; distilled notes never become exported or briefed rules until reinforced, and API mode sends redacted transcripts to the configured host (see `docs/configuration.md`, ADR 0012). Recall uses a hashed n-gram embedder by default, so paraphrases that share no words with a memory can miss. An optional local embedder (`pip install 'alethea[local]'`, `ALETHEA_EMBEDDER=fastembed:sentence-transformers/all-MiniLM-L6-v2`, runs on-device) is wired in and fail-soft, but its real-model path is verified only up to the package import and with stubbed embeddings, and its cosine distributions are unmeasured, so it ships with the conservative hashed thresholds; see `docs/configuration.md`. `ALETHEA_EMBEDDER=openai:<model>` is off by default and sends memory text to a third party (redacted, best-effort) only with `ALETHEA_EMBEDDER_ALLOW_REMOTE=1` and an API key in `ALETHEA_EMBEDDER_API_KEY`; read the privacy warning in `docs/configuration.md` first.
+Pre-release (not on PyPI, not yet merged to `main`). The core engine, daemon, client, MCP server, `mnemo` CLI, Claude Code hooks and installer, Cursor installer, rule export, Docker image, and the optional remote embedder and LLM distillation are built and covered by an automated test suite. What has **not** been verified: a live Claude Code or Cursor session, a real embedding model or provider endpoint, `docker compose`, and macOS. Every review so far was done by AI agents. Recall uses a hashed n-gram embedder by default, so paraphrases that share no words with a memory can miss. Remote embedding and LLM distillation are off by default and send redacted memory text to a third party only with explicit opt-in; read the privacy warning in [docs/reference/configuration.md](docs/reference/configuration.md) first. Full detail: [docs/architecture/status.md](docs/architecture/status.md) and [docs/project/traction-checklist.md](docs/project/traction-checklist.md).
 
 ## Requirements
 
@@ -22,7 +27,7 @@ Claude Code hooks (T22), the Claude Code installer and packaging (part of T30) a
 
 ## Install
 
-**Not on PyPI yet** (the distribution name `alethea` was verified free on 2026-10-24; see [docs/traction-checklist.md](docs/traction-checklist.md)). Until it is published, install from a checkout or a built wheel:
+**Not on PyPI yet** (the distribution name `alethea` was verified free on 2026-10-24; see [docs/project/traction-checklist.md](docs/project/traction-checklist.md)). Until it is published, install from a checkout or a built wheel:
 
 ```sh
 git clone https://github.com/sak-io/alethea && cd alethea
@@ -51,7 +56,7 @@ mnemo install claude-code --dry-run       # show the hooks diff; nothing is writ
 mnemo install --print mcp                 # MCP-only config snippet (see below)
 ```
 
-The daemon keeps running until you stop it: `kill <pid>`, with the pid shown by `mnemo status`. `mnemo` exits 0 when the daemon is down; use `--strict` or `MNEMO_STRICT=1` for non-zero exit codes. `mnemo --help` lists all commands; every command, exit code, daemon verb and MCP tool is in [docs/api.md](docs/api.md).
+The daemon keeps running until you stop it: `kill <pid>`, with the pid shown by `mnemo status`. `mnemo` exits 0 when the daemon is down; use `--strict` or `MNEMO_STRICT=1` for non-zero exit codes. `mnemo --help` lists all commands; every command, exit code, daemon verb and MCP tool is in [docs/reference/api.md](docs/reference/api.md).
 
 Without installing, from a clone, `scripts/mnemo <command>` runs the same CLI.
 
@@ -101,7 +106,7 @@ Re-export happens when you run the command, after `mnemo forget` / `mnemo sleep`
 
 ## Configuration
 
-All `ALETHEA_*` and `MNEMO_*` environment variables are listed in [docs/configuration.md](docs/configuration.md), including the security warning for `ALETHEA_ALLOW_REMOTE_TOKEN`.
+All `ALETHEA_*` and `MNEMO_*` environment variables are listed in [docs/reference/configuration.md](docs/reference/configuration.md), including the security warning for `ALETHEA_ALLOW_REMOTE_TOKEN`.
 
 ## Tests
 
@@ -113,15 +118,13 @@ ALETHEA_PERF=1 python3 -m unittest tests.test_perf          # 10k-memory recall 
 
 ## Documentation
 
-- [Product concept](docs/product-concept.md): the problem, the thesis, how Alethea behaves, and project direction.
-- [Technical details](docs/technical-details.md): schema, algorithms, thresholds, process architecture, and build order.
-- [Configuration](docs/configuration.md): every environment variable.
-- [Architecture](docs/architecture.md): how the engine, daemon, client, MCP server, CLI, hooks, sleep cycle, plugins, installer and Docker image fit together.
-- [API reference](docs/api.md): daemon verbs, MCP tools, `mnemo` commands and exit codes.
-- [Threat model](docs/threat-model.md): assets, trust boundaries, defences against hostile memory text, consent for remote calls, known gaps.
-- [Docker sidecar](docs/docker.md) and [traction checklist](docs/traction-checklist.md) (what to verify before announcing).
-- [Reviewer's guide](docs/review-guide.md).
-- [Architecture notes](docs/architecture/): status, lessons, plan and decisions (ADRs in [docs/adr/](docs/adr/)).
+Start at the [documentation home](docs/README.md), which has reading paths for users, evaluators, operators, contributors and security reviewers. Key entry points:
+
+- [What is Alethea?](docs/product/what-is-alethea.md): the problem, the idea and how it behaves, in plain language.
+- [Business case](docs/product/business-case.md): who it is for, how it compares, assumptions to validate.
+- [Architecture overview](docs/architecture/overview.md): components, flows, decisions, with links to the deep dives ([technical details](docs/architecture/technical-details.md), [threat model](docs/architecture/threat-model.md), [ADRs](docs/adr/0001-owner-choices.md)).
+- Reference: [API](docs/reference/api.md) (daemon verbs, MCP tools, `mnemo` commands, exit codes) and [configuration](docs/reference/configuration.md) (every environment variable).
+- Guides: [integrations](docs/guides/integrations.md) and [Docker sidecar](docs/guides/docker.md).
 
 ## License
 

@@ -1,4 +1,4 @@
-# Alethea sidecar. Usage and threat notes: docs/docker.md
+# Alethea sidecar. Usage and threat notes: docs/guides/docker.md
 #   export ALETHEA_TOKEN="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
 #   docker compose up -d --build
 # No default token exists: compose refuses to start while ALETHEA_TOKEN is unset or empty.
