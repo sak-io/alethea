@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # pinned: ubuntu-latest is now 26.04, which has no Python 3.9 build for setup-python
     timeout-minutes: 15
     strategy:
       fail-fast: false   # one failing interpreter must not hide the others' results
@@ -20,7 +20,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: python3 -m unittest discover -s tests -t . -v
   package:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # pinned: ubuntu-latest is now 26.04, which has no Python 3.9 build for setup-python
     timeout-minutes: 15
     strategy:
       fail-fast: false
