@@ -39,7 +39,7 @@ Three kinds of process, sharing nothing but the socket: one daemon per `ALETHEA_
 | Store | [`cortex.py`](../../alethea/cortex.py) | SQLite (WAL) schema, FTS5 index, association edges, journal, sessions, key/value meta. Four memory kinds with per-kind decay. Refuses a database newer than the code. | [technical-details: memory model](technical-details.md#3-memory-model), [decay half-lives](decay-halflives.md) |
 | Write path | [`encode.py`](../../alethea/encode.py) | The `encode()` gate: redact, score, dedup against neighbours, then create, reinforce or reject. `observe()` journals a turn and promotes it only when durable. | [technical-details: encoding](technical-details.md#5-encoding-encodepy), ADR [0006](../adr/0006-substitution-damp.md), [0007](../adr/0007-order-and-case-vetoes.md), [0008](../adr/0008-dedup-fts-window-cap.md) |
 | Read path | [`recall.py`](../../alethea/recall.py) | Full-text and vector candidates fused by rank, same-repo boost, spreading activation over edges, relevance floors, reinforcement of hits. `briefing()` picks the strongest memories for a repo. | [technical-details: retrieval](technical-details.md#6-retrieval-recallpy), ADR [0014](../adr/0014-hash-salt-version-and-semantic-floor.md) |
-| Sleep cycle | [`consolidate.py`](../../alethea/consolidate.py) | Groups journal rows into episodes, extracts gists, weakens and archives, links related memories, purges old rows. Each stage is isolated and the cycle has a wall-clock budget. | [technical-details: consolidation](technical-details.md#7-consolidation-consolidatepy), ADR [0003](../adr/0003-activation-and-downscale.md), [0005](../adr/0005-sleep-lock-granularity.md) |
+| Sleep cycle | [`consolidate.py`](../../alethea/consolidate.py) | Groups journal rows into episodes, extracts gists, purges old journal rows, weakens and archives, links related memories. Each stage is isolated and the cycle has a wall-clock budget. | [technical-details: consolidation](technical-details.md#7-consolidation-consolidatepy), ADR [0003](../adr/0003-activation-and-downscale.md), [0005](../adr/0005-sleep-lock-granularity.md) |
 | Locking | [`fairlock.py`](../../alethea/fairlock.py) | A handoff lock so a long sleep cycle, which takes the lock per batch, cannot starve requests. | ADR [0005](../adr/0005-sleep-lock-granularity.md) |
 | Daemon | [`daemon.py`](../../alethea/daemon.py) | `Server` owns sockets, limits and auth; `Alethea` owns the verb table. Runs the idle-triggered sleep loop. | [technical-details: processes](technical-details.md#8-process-architecture), ADR [0004](../adr/0004-tcp-auth-and-container-binding.md), [API](../reference/api.md) |
 | Client | [`client.py`](../../alethea/client.py) | The only way hosts talk to the daemon. Hard deadlines; returns `{"ok": false, "offline": true}` on any failure; can autostart a detached daemon. | [API](../reference/api.md), [threat model: availability](threat-model.md#8-availability) |
@@ -80,11 +80,13 @@ Deliberate (`remember` or `reflect`, via MCP or `mnemo`):
 
 ### Sleep cycle
 
-1. The daemon starts a cycle after `ALETHEA_IDLE_SLEEP` idle seconds (at most every `ALETHEA_SLEEP_INTERVAL`, and only if something happened), or a hook asks for one (PreCompact, SessionEnd).
-2. Consolidate: journal rows are grouped into episodes; each gets a summary and extracted facts, written through the same `encode()` gate.
-3. Downscale: strength decays per memory kind; weak memories are archived. Gated to once per 6 hours so restarts or clock skew cannot compress forgetting.
-4. Recombine: related semantic, procedural and identity memories are linked.
-5. Purge: old journal rows are deleted, and so are episodic memories that were archived long ago and never recalled. Identity memories are never decayed or purged.
+1. The daemon starts a cycle after `ALETHEA_IDLE_SLEEP` idle seconds (at most every `ALETHEA_SLEEP_INTERVAL`, and only if something happened), when `mnemo sleep` asks for one, or when a hook does. SessionEnd runs stage 2 only; PreCompact runs stages 2 and 3 (no downscale or recombine).
+2. Consolidate: journal rows are grouped into episodes; each gets a summary and extracted facts, written through the same `encode()` gate. Optional LLM distillation (off by default) acts here and, in API mode, only in idle-timer cycles.
+3. Purge journal: raw rows are deleted 30 days after they were consolidated, or 90 days if they never were.
+4. Downscale: strength decays per memory kind for the time elapsed since the last pass (capped at 14 days); weak memories are archived. Gated to once per 6 hours so restarts or clock skew cannot compress forgetting. The same stage deletes archived episodic memories that were never recalled (about 45 days) and suppressed memories (about 90 days). Identity memories are never decayed or purged.
+5. Recombine: related semantic, procedural and identity memories are linked.
+
+Each stage is isolated (an error in one does not stop the others), takes the engine lock per batch, and the cycle has a wall-clock budget; unfinished work resumes next time.
 
 All thresholds and timings are in [technical-details.md](technical-details.md); numbers are deliberately not repeated here.
 

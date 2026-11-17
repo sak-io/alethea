@@ -24,7 +24,7 @@ Human memory is useful because it is lossy in a structured way. It keeps what ma
 | Neocortex (durable knowledge) | The long-term memories and the links between them. |
 | Amygdala (emotional weight) | A score for how consequential a piece of text is: decisions, corrections, causes, "never do this". |
 | Surprise | Novelty: saying something already known adds little or nothing. |
-| Sleep | A background pass that summarises the journal, weakens old memories and links related ones. |
+| Sleep | A background pass, run when you are idle, that summarises the journal, weakens unused memories, links related ones and tidies up. |
 | Forgetting curve | Every memory loses strength over time, at a rate that depends on its kind. |
 | Testing effect | Every time a memory is recalled, it gets stronger. |
 
@@ -57,20 +57,28 @@ Every candidate memory passes the same gate, called `encode()`:
 
 ## What the sleep cycle does
 
-When you have been idle for a few minutes (or when a session ends or is about to be compacted), Alethea runs a consolidation pass in the background:
+There is no nightly schedule. Alethea sleeps when you stop using it: after about three idle minutes, and at least fifteen minutes after the previous cycle (`ALETHEA_IDLE_SLEEP`, `ALETHEA_SLEEP_INTERVAL`), and only if something has happened since. You can also run a full cycle yourself with `mnemo sleep`. Two lighter forms are triggered by the host's hooks:
 
-- groups the journal into episodes (a gap of 15 minutes starts a new one) and writes a short summary plus extracted facts;
-- weakens every memory a little, with the rate set by kind, and archives those that have faded too far;
-- links memories that are related but not duplicates;
-- deletes old journal rows, and episodic memories that were archived long ago and never recalled.
+- **Session end:** only the summarising step (stage 1 below).
+- **Before the host compacts its context:** summarising and journal tidying (stages 1 and 2), but not the slower weakening and linking.
 
-Summaries are written by extraction (ranking sentences), not by a language model, unless you turn on the optional LLM-assisted mode. Extraction on messy terminal output can produce disjointed snippets.
+A full cycle runs these stages in order, in the background:
+
+1. **Replay and summarise.** The journal is grouped into episodes (a gap of 15 minutes starts a new one). Each episode gets a short summary plus extracted facts, written through the same gate as any other memory.
+2. **Tidy the journal.** Raw journal rows are deleted 30 days after they were summarised, or 90 days if they never were. The summaries and facts stay.
+3. **Weaken what has gone unused.** Each memory loses strength for the time that has passed since the last pass, at a rate set by its kind. Identity memories are exempt. This runs at most once every six hours, and one pass applies at most 14 days of weakening, so a long break does not wipe out what you knew. A memory that falls too weak is **archived**: it no longer shows up in normal recall, but it is not erased.
+4. **Delete narrowly.** Only archived episodic memories that were never recalled again are deleted for good, after about 45 days. Memories you asked to forget are deleted after about 90 days. Archived facts and procedures are kept, and identity memories are never deleted.
+5. **Link related memories.** Facts, procedures and identity memories that are clearly related but not duplicates get a link, so recalling one can surface its neighbour.
+
+The cycle works in small batches so requests are never blocked behind it, and it has a time budget of about two minutes. If it runs out of time it stops between episodes and resumes next time. If one stage fails, the others still run.
+
+Summaries are written by extraction (ranking sentences), not by a language model, unless you turn on the optional LLM-assisted mode. Extraction on messy terminal output can produce disjointed snippets. "Sleep" is a metaphor for this maintenance job. It has been exercised by automated tests and simulations, not through weeks of real use.
 
 ## A short example session
 
 This is an illustration of the design, using the commands from the [README quick start](../../README.md#quick-start). The hook-driven parts have not been observed in a live Claude Code session yet (see [maturity](#how-mature-is-it)).
 
-**Monday.** You and the agent debate databases. You say: "We decided to use PostgreSQL for the billing service because we need transactions." Decision and causal language count towards the durability score, so a turn like this is a candidate for immediate promotion to a semantic memory (if it scores too low, it still waits in the journal for the sleep cycle). The rest of the chat stays in the journal. That evening the sleep cycle compresses it into an episode summary.
+**Monday.** You and the agent debate databases. You say: "We decided to use PostgreSQL for the billing service because we need transactions." Decision and causal language count towards the durability score, so a turn like this is a candidate for immediate promotion to a semantic memory (if it scores too low, it still waits in the journal for the sleep cycle). The rest of the chat stays in the journal. Once you have been idle for a few minutes, or when the session ends, the sleep cycle compresses it into an episode summary.
 
 Or, deliberately and without hooks:
 
